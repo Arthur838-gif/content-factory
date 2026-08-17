@@ -58,10 +58,38 @@ _MOCK_WECHAT = {
     ),
 }
 
+# 刻意满足 P1 量规：标题 ≤20 字含 emoji、正文口语化每段 ≤3 行（300-800 字）、
+# 标签 3-5 个不带 #、金句 2-4 句每句 ≤20 字——mock 模式下结构验收与 M7 拼标签都有据可验。
+_MOCK_XHS = {
+    "title": "试了一圈AI工具，真的回不去了🥲",
+    "content": (
+        "最近试了一圈AI工具，真的回不去了🥲\n\n"
+        "以前写方案要憋一整天，现在先把思路丢给AI，10分钟出初稿。"
+        "我再补点细节、改改语气，半小时收工。\n\n"
+        "分享3个我天天在用的👇\n\n"
+        "1️⃣ 写作助手：大纲、初稿、改语气，一句话的事。"
+        "卡壳时让它给3个角度，总有一个能抄作业\n\n"
+        "2️⃣ 会议纪要：录音转文字自动总结。"
+        "再也不用边开会边狂记，会后直接拿结论去推进\n\n"
+        "3️⃣ 数据整理：表格丢进去，让它找规律出图表。"
+        "以前手动核对两小时，现在泡杯咖啡的功夫\n\n"
+        "重点来了：工具只是放大器💡。思路清晰的人用它起飞，没思路的人只会复制粘贴\n\n"
+        "我的习惯是先写清楚\"我要什么结果\"，再让AI干活。prompt越具体，产出越能打\n\n"
+        "别再闷头加班了，先把工具用起来。省下来的时间摸鱼、学习、搞副业，不香吗😌\n\n"
+        "你们还有什么私藏工具？评论区交换一下情报👇"
+    ),
+    "tags": ["AI工具", "效率提升", "打工人", "摸鱼"],
+    "cover_text": "AI工具实测🔥",
+    "image_quotes": ["工具用得好，下班走得早", "别让重复劳动吃掉人生", "先理清思路，再让AI干活"],
+}
+
 
 def _mock_article(schema_cls: type[T]) -> T:
-    """返回一份符合指定 Schema 的固定 JSON（P0 只用 WechatArticle）。"""
-    data = _MOCK_WECHAT if schema_cls.__name__ == "WechatArticle" else {}
+    """返回一份符合指定 Schema 的固定 JSON（P0 用 WechatArticle，P1 加 XhsNote）。"""
+    name = schema_cls.__name__
+    data = _MOCK_WECHAT if name == "WechatArticle" else _MOCK_XHS if name == "XhsNote" else None
+    if data is None:
+        raise ValueError(f"mock 降级未覆盖 Schema：{name}")
     return schema_cls.model_validate(data)
 
 

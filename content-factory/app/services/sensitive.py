@@ -1,9 +1,7 @@
 """敏感词过滤（计划书第 6.2 节，双端词表分离的共享服务）。
 
-P0 只提供公众号词表加载与命中检测；小红书词表与逻辑属 P1，到时只需新增
-sensitive_xhs.txt 与对应路径，不动 M5 调用方——这正是把它放在共享层的原因。
-
-词表即数据：词表存文件不写进代码，改词表不改代码。每次检测现读文件，词表改动立即生效，
+公众号词表 P0 起用；小红书词表 P1 接入（sensitive_xhs.txt）。词表即数据：
+词表存文件不写进代码，改词表不改代码。每次检测现读文件，词表改动立即生效，
 与 prompt_engine 的"模板不进程缓存"同构。
 """
 import logging
@@ -12,9 +10,10 @@ from .. import config
 
 logger = logging.getLogger(__name__)
 
-# 平台 → 词表路径；P1 补小红书时在此追加一项即可。
+# 平台 → 词表路径；新平台在此追加一项即可，不动 M5 调用方。
 _WORDLIST_PATHS: dict[str, "object"] = {
     "wechat": config.SENSITIVE_FILE_WECHAT,
+    "xhs": config.SENSITIVE_FILE_XHS,
 }
 
 

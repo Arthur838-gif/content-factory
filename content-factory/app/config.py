@@ -81,3 +81,4 @@ LLM_MOCK = os.environ.get("CF_LLM_MOCK", "0") == "1" or not OPENAI_API_KEY
 
 # ---- 敏感词表（第 6.2 节，双端词表分离）----
 SENSITIVE_FILE_WECHAT = Path(os.environ.get("CF_SENSITIVE_WECHAT", str(DATA_DIR / "sensitive_wechat.txt")))
+SENSITIVE_FILE_XHS = Path(os.environ.get("CF_SENSITIVE_XHS", str(DATA_DIR / "sensitive_xhs.txt")))

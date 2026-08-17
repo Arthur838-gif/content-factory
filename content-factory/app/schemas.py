@@ -1,4 +1,4 @@
-"""Pydantic 模型。P-1a 只需要 HotItem 与采集结果；WechatArticle 在 P0 补，XhsNote 留 P1。"""
+"""Pydantic 模型。HotItem 与采集结果（P-1a）、WechatArticle（P0）、XhsNote（P1）。"""
 import hashlib
 from datetime import datetime
 
@@ -53,3 +53,16 @@ class WechatArticle(BaseModel):
     title: str = Field(..., description="信息密度高的标题，≤ 30 字")
     digest: str = Field(..., description="摘要，≤ 54 字")
     content_md: str = Field(..., description="Markdown 正文，1500-3000 字，含小标题分级")
+
+
+class XhsNote(BaseModel):
+    """小红书输出 Schema（计划书 6.1 / SDD 5.6，M5 与适配层之间的契约）。
+
+    LLM 只产出这五个字段的结构化 JSON；#标签拼接与图文合成（P2）属 M7 适配层。
+    """
+
+    title: str = Field(..., description="标题，≤ 20 字，含 1-2 个 emoji 与情绪词或数字")
+    content: str = Field(..., description="口语化正文，每段 ≤ 3 行，段间空一行，总字数 300-800")
+    tags: list[str] = Field(..., description="3-5 个相关标签，不带 # 号")
+    cover_text: str = Field(..., description="封面主标题文案，≤ 12 字，有冲击力")
+    image_quotes: list[str] = Field(..., description="2-4 句金句，每句 ≤ 20 字，可直接印在图上")

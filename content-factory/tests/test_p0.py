@@ -28,6 +28,7 @@ from app import config  # noqa: E402
 _TMP = Path(tempfile.mkdtemp(prefix="p0_check_"))
 config.DB_PATH = _TMP / "app.db"
 config.SENSITIVE_FILE_WECHAT = _TMP / "sensitive_wechat.txt"
+config.SENSITIVE_FILE_XHS = _TMP / "sensitive_xhs.txt"
 config.LLM_MOCK = True
 config.RUN_SCHEDULER = False
 config.NOTIFY_WEBHOOK = ""
@@ -79,11 +80,12 @@ def main() -> int:
 
     print("\n[1] 种子模板入库（幂等键 wechat+article+v1）")
     seeded = prompt_engine.seed_prompts()
-    check("首次入库 1 条", seeded == ["wechat+article+v1"], str(seeded))
+    # P1 起 SEED_FILES 还含 xhs_note.yml，此处只断言公众号键已入库且 xhs 键随之入库
+    check("公众号模板首次入库", "wechat+article+v1" in seeded, str(seeded))
     reseeded = prompt_engine.seed_prompts()
     check("重复入库跳过（重启不覆盖）", reseeded == [], str(reseeded))
     with session_scope() as s:
-        p = s.scalars(select(Prompt)).first()
+        p = s.scalars(select(Prompt).where(Prompt.platform == "wechat")).first()
         check("模板字段完整", p is not None and p.platform == "wechat"
               and p.scenario == "article" and p.version == 1 and p.enabled, str(p and p.platform))
         check("模板含 system/user 标记", p is not None and "# system" in p.template
@@ -162,7 +164,10 @@ def main() -> int:
     r409 = _http_generate(client, 3)
     check("409 已有 published 终态行", r409.status_code == 409, str(r409.status_code))
     rxhs = _http_generate(client, 1, platform="xhs")
-    check("400 不支持平台 xhs（P1 才做）", rxhs.status_code == 400, str(rxhs.status_code))
+    check("xhs 已支持（P1 注册，返回 ready）",
+          rxhs.status_code == 200 and rxhs.json().get("status") == "ready", str(rxhs.json()))
+    rdouyin = _http_generate(client, 1, platform="douyin")
+    check("400 不支持平台", rdouyin.status_code == 400, str(rdouyin.status_code))
 
     print("\n[7] 真实 LLM 路径逻辑（patch _call_llm，不发 HTTP）")
     _run_realpath_tests()

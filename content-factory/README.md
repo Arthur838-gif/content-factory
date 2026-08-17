@@ -1,7 +1,8 @@
 # content-factory · 双端内容工厂
 
 公众号 + 小红书双端矩阵内容系统。上游事实来源：《双端内容工厂 · 开发计划书 v1.3》。
-本仓库当前进度：**P0 平台抽象重构**（M4 Prompt 策略引擎 + M5 内容生成服务骨架，platform=wechat）。
+本仓库当前进度：**P1 小红书文本生成**（P0 平台抽象 + M5 扩展 XhsNote + M7 文案适配，
+platform=wechat/xhs 双端）。
 
 > P-1a 已完成：8 表建表、采集/调度/备份/告警/雷达分析就位，`topics` 表有 radar 选题可供生成测试。
 
@@ -56,13 +57,31 @@ source=radar 选题生成与撞题合并、备份演练（保留 7 份）、告�
 `meta.usage` 记账 + topic→used）、模板热更新（改库不重启即对下次生成生效）、重新生成开新行+
 旧行归档、敏感词命中→failed、404/409/400、真实 LLM 路径（成功/重试成功/3 轮失败）。
 
+## P1 验收脚本（可重复运行，无 Key 走 mock，不依赖外网）
+
+```bash
+.venv/Scripts/python tests/test_p1.py        # 离线全量验证（mock 端到端 + 量规 + 适配器单元）
+```
+
+`test_p1.py` 覆盖：xhs+note+v1 种子模板幂等入库、端到端 mock 生成 platform=xhs
+（ready 行 + `tags` JSON 数组 + `meta.usage/cover_note/image_plan`）、M7 文案适配
+（正文末尾拼 `#标签`、与 tags 一一对应）、mock 产物满足 P1 量规（结构可测部分）、
+重新生成开新行+旧行归档（xhs）、published 终态 409、xhs 敏感词命中→failed、
+wechat 回归、适配器单元（标签去重去 #）。
+
+真实 Key 质量验收（连续 3 篇按量规打勾）通过后，固定 5 个代表性 topic 快照到
+`tests/golden/` 作为回归基线；mock 模式下不产出 golden set。
+
 ### 端到端 curl 验收（需起服务）
 
 ```bash
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
-# 1. 生成（未配 OPENAI_API_KEY 时自动走 mock 降级）
+# 1. 小红书生成（未配 OPENAI_API_KEY 时自动走 mock 降级）
+curl -X POST "http://127.0.0.1:8000/api/topics/1/generate?platform=xhs"
+sqlite3 data/app.db "SELECT id,status,platform FROM articles WHERE platform='xhs' ORDER BY id DESC LIMIT 1;"
+# content 末尾已拼 #标签，可直接复制发布；meta 存 cover_note + image_plan
+# 2. 公众号生成（P0 回归）
 curl -X POST "http://127.0.0.1:8000/api/topics/1/generate?platform=wechat"
-sqlite3 data/app.db "SELECT id,status,platform,meta FROM articles ORDER BY id DESC LIMIT 1;"
 # 2. 模板热更新（不重启即生效）
 sqlite3 data/app.db "UPDATE prompts SET template=REPLACE(template,'信息密度高','改过的文案') WHERE id=1;"
 curl -X POST "http://127.0.0.1:8000/api/topics/2/generate?platform=wechat"
@@ -84,8 +103,9 @@ sqlite3 data/app.db "SELECT id,status FROM articles WHERE topic_id=1 ORDER BY id
   强制 JSON mode，只依赖这三个环境变量，供应商切换不改代码。**未配置 `OPENAI_API_KEY` 时
   自动走 mock 降级**（返回固定 JSON、`meta.usage.model="mock"`），用于无 Key 跑通链路结构；
   配 Key 后自动走真实 HTTP 调用。超时（默认 60s）、`max_tokens` 上限、单价等集中在 `config.py`。
-- `data/sensitive_wechat.txt`：公众号敏感词表，改词表不改代码；命中即标 `status=failed`
-  并在 `error` 注明命中词。空表占位，冷启动由人工整理后滚动扩充。
+- `data/sensitive_wechat.txt` / `data/sensitive_xhs.txt`：双端敏感词表（P1 起双端齐备），
+  改词表不改代码；命中即标 `status=failed` 并在 `error` 注明命中词。空表/少量占位，
+  冷启动由人工整理后滚动扩充。
 
 ## 目录
 
@@ -93,7 +113,9 @@ sqlite3 data/app.db "SELECT id,status FROM articles WHERE topic_id=1 ORDER BY id
 `collectors/{base,hotboard}.py`、`services/{radar,notify,scheduler}.py`、
 `api/routes_admin.py`。P0 交付 `services/{prompt_engine,generator,sensitive}.py`、
 `api/routes_topics.py`、`schemas.py`（补 `WechatArticle`）、`prompts/wechat_article.yml`。
-其余模块（M2 采样、M6/M7 适配器、M8 素材包、小红书词表）按路线图在后续阶段交付。
+P1 交付 `schemas.py`（补 `XhsNote`）、`adapters/xhs.py`（M7 文案适配）、
+`prompts/xhs_note.yml`（A1 种子）、`data/sensitive_xhs.txt`、`tests/test_p1.py`。
+其余模块（M2 采样、M6 草稿箱、PIL 图文合成（P2）、M8 素材包（P3））按路线图在后续阶段交付。
 
 ## 定时任务（APScheduler）
 
