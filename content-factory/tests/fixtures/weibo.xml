@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>微博热搜榜</title>
+    <link>https://s.weibo.com/top/summary</link>
+    <description>RSSHub fixture · weibo</description>
+    <item>
+      <title>DeepSeek 发布新一代大模型，编程能力大幅提升</title>
+      <link>https://example.com/hot/deepseek-new-model</link>
+      <description>热度 4821536</description>
+      <pubDate>Sun, 16 Aug 2026 08:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>大模型价格战再起，开发者迎来红利</title>
+      <link>https://example.com/hot/llm-price-war</link>
+      <description>热度 3610245</description>
+      <pubDate>Sun, 16 Aug 2026 08:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>某明星官宣结婚</title>
+      <link>https://example.com/hot/star-wedding</link>
+      <description>热度 3200511</description>
+      <pubDate>Sun, 16 Aug 2026 08:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>今晚油价调整</title>
+      <link>https://example.com/hot/oil-price</link>
+      <description>热度 2890332</description>
+      <pubDate>Sun, 16 Aug 2026 08:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>Claude 智能体自动编程实测火了</title>
+      <link>https://example.com/hot/claude-agent-coding</link>
+      <description>热度 2150667</description>
+      <pubDate>Sun, 16 Aug 2026 08:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>台风路径最新消息</title>
+      <link>https://example.com/hot/typhoon-track</link>
+      <description>热度 1980442</description>
+      <pubDate>Sun, 16 Aug 2026 08:00:00 +0800</pubDate>
+    </item>
+  </channel>
+</rss>

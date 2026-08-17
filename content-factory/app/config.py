@@ -1,0 +1,83 @@
+"""环境变量与常量（计划书第 3、4、6、7 章）。
+
+密钥只出现在 .env（不入库）；.env 中已有的值不覆盖进程环境变量。
+"""
+import os
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv(PROJECT_ROOT / ".env")
+
+# ---- 数据层 ----
+DATA_DIR = Path(os.environ.get("CF_DATA_DIR", str(PROJECT_ROOT / "data")))
+DB_PATH = Path(os.environ.get("CF_DB_PATH", str(DATA_DIR / "app.db")))
+BACKUP_DIR = Path(os.environ.get("CF_BACKUP_DIR", str(DATA_DIR / "backups")))
+DOMAINS_FILE = Path(os.environ.get("CF_DOMAINS_FILE", str(DATA_DIR / "domains.yml")))
+
+# ---- 热榜采集（M1）----
+# RSSHub 基地址。自建实例替换之；离线调试可指向本地 RSS fixture 目录，
+# 形如 file:///abs/path/to/fixtures（按 {source}.xml 读取，走同一套解析代码）。
+RSSHUB_BASE_URL = os.environ.get("RSSHUB_BASE_URL", "https://rsshub.app").rstrip("/")
+HOTBOARD_SOURCES: dict[str, dict[str, str]] = {
+    "weibo": {"route": "/weibo/search/hot", "label": "微博热搜"},
+    "zhihu": {"route": "/zhihu/hotlist", "label": "知乎热榜"},
+    "baidu": {"route": "/baidu/topwords", "label": "百度热搜"},
+}
+HTTP_TIMEOUT_SECONDS = 15
+
+# ---- 低粉爆款三阈值（第 6.2 节初版，TODO(confirm)：P4 用回填数据校准后固化）----
+VIRAL_FANS_MAX = 5000
+VIRAL_LIKES_MIN = 500
+VIRAL_SCORE_MIN = 2.0
+
+# ---- 选题雷达（部分 M3，P-1a）----
+TOPIC_JACCARD_THRESHOLD = 0.5  # 撞题判定重叠度阈值，初值待 P4 校准
+TOPIC_DEDUP_WINDOW_DAYS = 7  # 撞题回看窗口
+TOPIC_TTL_HOURS = 72  # radar 选题保鲜：created_at + 72h
+
+# ---- 数据保留与备份（第 5 章 / 第 10 章协作纪律）----
+HOT_ITEMS_RETENTION_DAYS = 90  # hot_items 只保留 90 天，周清理任务物理删除
+BACKUP_KEEP = 7  # 每日备份保留最近 7 份
+
+# ---- 告警（第 7 章横切约定）----
+NOTIFY_WEBHOOK = os.environ.get("NOTIFY_WEBHOOK", "")
+COLLECTOR_FAIL_ALERT_AFTER = 3  # 连续失败达到该次数即外发告警
+
+# ---- 运行开关 ----
+RUN_SCHEDULER = os.environ.get("RUN_SCHEDULER", "1") != "0"
+
+# ---- LLM（M5 产品内，P0 起；计划书第 13.4 节）----
+# OpenAI 兼容协议，客户端只依赖下面三个环境变量，供应商切换不改代码。
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com").rstrip("/")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-chat")
+
+# 成本与超时控制（第 6.4 / 8.3 节，超时值集中在此，建议 60s 可热改）
+LLM_MAX_TOKENS = int(os.environ.get("CF_LLM_MAX_TOKENS", "4096"))
+LLM_TIMEOUT_SECONDS = int(os.environ.get("CF_LLM_TIMEOUT_SECONDS", "60"))
+LLM_MAX_RETRIES = 2  # 重试封顶 2 次（1 次首发 + 2 次重试 = 最多 3 轮）
+# DeepSeek 单价（美元 / 每百万 token），用于 meta.usage.cost_est 估算；换供应商时改这里
+LLM_PRICE_INPUT_PER_M = float(os.environ.get("CF_LLM_PRICE_INPUT", "0.30"))
+LLM_PRICE_OUTPUT_PER_M = float(os.environ.get("CF_LLM_PRICE_OUTPUT", "0.50"))
+
+# 无 Key 降级（P0 验收期脚手架）：未配置 OPENAI_API_KEY 或显式 CF_LLM_MOCK=1 时走 mock。
+# mock 仅用于跑通链路结构，真实 Key 配置后自动走真实 HTTP 调用，两路径并列、由开关分流。
+LLM_MOCK = os.environ.get("CF_LLM_MOCK", "0") == "1" or not OPENAI_API_KEY
+
+# ---- 敏感词表（第 6.2 节，双端词表分离）----
+SENSITIVE_FILE_WECHAT = Path(os.environ.get("CF_SENSITIVE_WECHAT", str(DATA_DIR / "sensitive_wechat.txt")))

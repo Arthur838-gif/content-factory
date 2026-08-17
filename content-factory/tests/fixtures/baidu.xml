@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>百度热搜</title>
+    <link>https://top.baidu.com/board</link>
+    <description>RSSHub fixture · baidu</description>
+    <item>
+      <title>小红书爆款文案模板被疯传</title>
+      <link>https://example.com/hot/xhs-viral-template</link>
+      <description>热度 891234</description>
+      <pubDate>Sun, 16 Aug 2026 08:10:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>程序员效率工具推荐清单</title>
+      <link>https://example.com/hot/dev-efficiency-tools</link>
+      <description>热度 752331</description>
+      <pubDate>Sun, 16 Aug 2026 08:10:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>打工人存钱攻略火了</title>
+      <link>https://example.com/hot/worker-saving-guide</link>
+      <description>热度 633102</description>
+      <pubDate>Sun, 16 Aug 2026 08:10:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>基金大跌</title>
+      <link>https://example.com/hot/fund-drop</link>
+      <description>不命中领域关键词</description>
+      <pubDate>Sun, 16 Aug 2026 08:10:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>世界杯预选赛积分榜</title>
+      <link>https://example.com/hot/worldcup-standings</link>
+      <description>不命中领域关键词</description>
+      <pubDate>Sun, 16 Aug 2026 08:10:00 +0800</pubDate>
+    </item>
+  </channel>
+</rss>

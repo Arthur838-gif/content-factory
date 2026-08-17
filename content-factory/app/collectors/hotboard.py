@@ -1,0 +1,105 @@
+"""M1 热榜采集器：RSSHub（微博 / 知乎 / 百度）。
+
+不做全文抓取，只要标题、链接、热度字段；不登录、不带 Cookie。
+单源失败只记日志并计入连续失败，不影响其他源。
+"""
+import logging
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+
+import httpx
+
+from .. import config
+from ..schemas import HotItem
+from .base import BaseCollector, failure_tracker, register_collector
+
+logger = logging.getLogger(__name__)
+
+
+def _local_naive(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _child_text(item: ET.Element, name: str) -> str:
+    for child in item:
+        if _local_name(child.tag) == name:
+            return (child.text or "").strip()
+    return ""
+
+
+def parse_rss(xml_text: str, source: str, author: str) -> list[HotItem]:
+    """RSS 2.0 → HotItem 列表。rank（榜单位次）记入 raw。"""
+    root = ET.fromstring(xml_text)
+    items: list[HotItem] = []
+    rank = 0
+    for element in root.iter():
+        if _local_name(element.tag) != "item":
+            continue
+        rank += 1
+        title = _child_text(element, "title")
+        if not title:
+            continue
+        items.append(
+            HotItem(
+                source=source,
+                title=title,
+                url=_child_text(element, "link"),
+                author=author,
+                captured_at=_local_naive(_child_text(element, "pubDate")),
+                raw={
+                    "rank": rank,
+                    "description": _child_text(element, "description")[:500],
+                    "board": author,
+                },
+            )
+        )
+    return items
+
+
+@register_collector
+class HotboardCollector(BaseCollector):
+    name = "hotboard"
+
+    def fetch(self) -> list[HotItem]:
+        items: list[HotItem] = []
+        for source_name, spec in config.HOTBOARD_SOURCES.items():
+            key = f"{self.name}:{source_name}"
+            try:
+                xml_text = self._fetch_source(source_name, spec["route"])
+                parsed = parse_rss(xml_text, source=source_name, author=spec["label"])
+                if not parsed:
+                    raise ValueError("RSS 解析结果为空")
+                items.extend(parsed)
+                failure_tracker.track_success(key)
+                logger.info("热榜源 %s 拉取 %s 条", source_name, len(parsed))
+            except Exception as exc:
+                # 单源失败只记日志不影响其他源；连续失败由 tracker 外发告警
+                logger.warning("热榜源 %s 拉取失败：%r", source_name, exc)
+                failure_tracker.track_failure(key, f"{source_name}: {exc!r}")
+        return items
+
+    def _fetch_source(self, source_name: str, route: str) -> str:
+        if config.RSSHUB_BASE_URL.startswith("file://"):
+            fixture = Path(config.RSSHUB_BASE_URL[len("file://"):]) / f"{source_name}.xml"
+            return fixture.read_text(encoding="utf-8")
+        resp = httpx.get(
+            config.RSSHUB_BASE_URL + route,
+            timeout=config.HTTP_TIMEOUT_SECONDS,
+            headers={"User-Agent": "content-factory/0.1"},
+        )
+        resp.raise_for_status()
+        return resp.text

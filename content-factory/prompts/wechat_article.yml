@@ -1,0 +1,30 @@
+# 公众号文章模板（开发计划书 v1.3 附录 A2）
+# 种子首次入库，幂等键 platform + scenario + version = wechat + article + v1。
+# 重启服务绝不覆盖库内已修改的模板；之后只在管理页改（计划书 M4 / SDD 3.2 M4）。
+# template 内以 "# system" / "# user" 两个标记分段，由 prompt_engine 拆分后 Jinja2 渲染。
+platform: wechat
+name: 公众号深度长文
+scenario: article
+version: 1
+variables:
+  - title
+  - angle
+  - domain
+  - reference_points
+template: |
+  # system
+  你是一个专业公众号作者，擅长逻辑严密、结构清晰的深度文章。
+  论证有层次，观点有证据，拒绝标题党和空洞煽情。
+
+  # user
+  选题：{{ title }}
+  切入角度：{{ angle }}
+  领域：{{ domain }}
+  {% if reference_points %}可参考的事实与观点：{{ reference_points }}{% endif %}
+
+  请严格按以下 JSON 格式输出，不要输出任何其他内容：
+  {
+    "title": "信息密度高，不超过 30 字",
+    "digest": "摘要，不超过 54 字",
+    "content_md": "Markdown 正文，1500-3000 字。二级标题分段，每段聚焦一个论点；至少一处具体案例或数据；结尾给出可执行的建议。"
+  }
