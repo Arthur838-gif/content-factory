@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}内容工厂{% endblock %}</title>
+  <style>
+    :root { color-scheme: light; --ink:#1e293b; --muted:#64748b; --line:#dbe3ed; --paper:#f8fafc; --brand:#2563eb; }
+    * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:var(--paper); font:14px/1.55 system-ui,-apple-system,"Microsoft YaHei",sans-serif; }
+    header { background:#fff; border-bottom:1px solid var(--line); padding:14px 5vw; display:flex; gap:24px; align-items:center; } header strong { font-size:18px; } nav a { margin-right:14px; color:var(--muted); text-decoration:none; } nav a:hover { color:var(--brand); }
+    main { max-width:1180px; margin:28px auto; padding:0 20px; } h1 { font-size:24px; } .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px; margin:14px 0; }
+    table { width:100%; border-collapse:collapse; background:#fff; } th,td { padding:10px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); } th { color:var(--muted); font-weight:600; white-space:nowrap; }
+    button,.button { display:inline-block; cursor:pointer; border:1px solid var(--brand); border-radius:6px; padding:6px 9px; color:#fff; background:var(--brand); text-decoration:none; font:inherit; } button.secondary,.button.secondary { color:var(--brand); background:#fff; } button:disabled { cursor:not-allowed; opacity:.45; }
+    .badge { display:inline-block; border-radius:99px; padding:1px 8px; font-size:12px; background:#e2e8f0; } .ready { background:#dcfce7; color:#166534; } .failed { background:#fee2e2; color:#991b1b; } .published { background:#dbeafe; color:#1d4ed8; } .archived { background:#e5e7eb; color:#4b5563; }
+    .muted { color:var(--muted); } .actions { display:flex; flex-wrap:wrap; gap:6px; } textarea,input,select { width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; font:inherit; } label { display:block; margin:9px 0 4px; }
+    pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0; font:inherit; } .grid { display:grid; gap:18px; grid-template-columns:minmax(0,1fr) minmax(280px,.8fr); } .images { display:grid; gap:10px; grid-template-columns:repeat(2,minmax(0,1fr)); } .images img { max-width:100%; border-radius:7px; border:1px solid var(--line); }
+    .field-title { display:flex; justify-content:space-between; align-items:center; } .notice { padding:10px; border-radius:7px; background:#fef3c7; color:#92400e; } @media(max-width:760px){.grid{grid-template-columns:1fr} table{display:block;overflow:auto}}
+  </style>
+</head>
+<body><header><strong>内容工厂</strong><nav><a href="/">选题台</a><a href="/prompts">模板管理</a></nav></header><main>{% block content %}{% endblock %}</main>
+<script>
+async function copyText(id) { const text=document.getElementById(id).innerText; await navigator.clipboard.writeText(text); }
+async function generate(topicId, platform) { const r=await fetch(`/api/topics/${topicId}/generate?platform=${platform}`,{method:'POST'}); const d=await r.json(); if(r.ok && d.article_id) location.href=`/articles/${d.article_id}`; else alert(d.detail || d.error || '生成失败'); }
+</script></body></html>

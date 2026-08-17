@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block title %}选题台 · 内容工厂{% endblock %}
+{% block content %}<h1>选题台</h1>
+{% if topics %}<div class="card"><table><thead><tr><th>选题</th><th>领域 / 来源</th><th>评分</th><th>状态</th><th>保鲜截止</th><th>最新生成</th><th>操作</th></tr></thead><tbody>
+{% for topic in topics %}<tr><td><strong>{{ topic.title }}</strong><br><span class="muted">{{ topic.angle }}</span></td><td>{{ topic.domain }}<br><span class="badge">{{ topic.source }}</span></td><td>{{ "%.2f"|format(topic.score or 0) }}</td><td><span class="badge {{ topic.status }}">{{ topic.status }}</span></td><td>{% if topic.expires_at %}{{ topic.expires_at.strftime('%Y-%m-%d %H:%M') }}{% else %}<span class="muted">不适用</span>{% endif %}</td>
+<td>{% set rows=latest.get(topic.id,{}) %}{% for platform,article in rows.items() %}<a class="badge {{ article.status }}" href="/articles/{{ article.id }}">{{ platform }} · {{ article.status }}</a> {% else %}<span class="muted">暂无</span>{% endfor %}</td>
+<td><div class="actions"><button onclick="generate({{ topic.id }},'wechat')">生成公众号</button><button onclick="generate({{ topic.id }},'xhs')">生成小红书</button></div></td></tr>{% endfor %}
+</tbody></table></div>{% else %}<div class="card muted">暂无选题，去触发采集。</div>{% endif %}{% endblock %}
