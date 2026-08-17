@@ -1,0 +1,75 @@
+# 清单卡片版式（小红书，1080×1440）。P2 只交付版式与渲染能力，不接入生成链路
+# （XhsNote 无清单字段，待后续 prompt 输出扩展）。渲染示例见 tests/test_p2.py。
+name: checklist_card
+canvas: { width: 1080, height: 1440 }
+background: { color: "#ffffff" }
+font:
+  regular: SourceHanSansSC-Regular.otf
+  bold: SourceHanSansSC-Bold.otf
+slots:
+  - id: header_bar
+    type: rect
+    box: { x: 0, y: 0, width: 1080, height: 16 }
+    color: "#4b3fe3"
+  - id: title
+    type: text
+    box: { x: 90, y: 110, width: 900, height: 160 }
+    font: { size: 72, weight: bold, color: "#1a1b25", line_height: 1.3 }
+    align: left
+    valign: middle
+    shrink_to_fit: true
+  - id: badge_1
+    type: text
+    text: "1"
+    box: { x: 90, y: 400, width: 72, height: 72 }
+    font: { size: 40, weight: bold, color: "#ffffff", line_height: 1.0 }
+    align: center
+    valign: middle
+    badge: "#0e9f8a"
+  - id: item_1
+    type: text
+    box: { x: 200, y: 390, width: 790, height: 100 }
+    font: { size: 48, weight: regular, color: "#1a1b25", line_height: 1.4 }
+    align: left
+    valign: middle
+    shrink_to_fit: true
+  - id: badge_2
+    type: text
+    text: "2"
+    box: { x: 90, y: 620, width: 72, height: 72 }
+    font: { size: 40, weight: bold, color: "#ffffff", line_height: 1.0 }
+    align: center
+    valign: middle
+    badge: "#0e9f8a"
+  - id: item_2
+    type: text
+    box: { x: 200, y: 610, width: 790, height: 100 }
+    font: { size: 48, weight: regular, color: "#1a1b25", line_height: 1.4 }
+    align: left
+    valign: middle
+    shrink_to_fit: true
+  - id: badge_3
+    type: text
+    text: "3"
+    box: { x: 90, y: 840, width: 72, height: 72 }
+    font: { size: 40, weight: bold, color: "#ffffff", line_height: 1.0 }
+    align: center
+    valign: middle
+    badge: "#0e9f8a"
+  - id: item_3
+    type: text
+    box: { x: 200, y: 830, width: 790, height: 100 }
+    font: { size: 48, weight: regular, color: "#1a1b25", line_height: 1.4 }
+    align: left
+    valign: middle
+    shrink_to_fit: true
+  - id: divider
+    type: rect
+    box: { x: 90, y: 1060, width: 900, height: 2 }
+    color: "#e4e6f0"
+  - id: footer
+    type: text
+    box: { x: 90, y: 1150, width: 900, height: 60 }
+    font: { size: 36, weight: regular, color: "#5b5e6e", line_height: 1.2 }
+    align: center
+    valign: middle

@@ -4,7 +4,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# data/ 内容不入库，但领域词表 domains.yml 与敏感词表随仓库分发
+# data/ 内容不入库；随仓库分发的例外：领域词表、敏感词表、字体（OFL）、版式配置
 data/*
 !data/domains.yml
 !data/sensitive_*.txt
+!data/fonts/
+!data/imaging_templates/

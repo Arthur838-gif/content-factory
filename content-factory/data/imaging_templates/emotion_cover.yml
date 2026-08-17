@@ -1,0 +1,26 @@
+# 情绪封面版式（小红书，1080×1440）。主槽位：cover_note（≤12 字情绪主标题）。
+# 深底白字强对比，顶部色条点缀；headline 由调用方传入。
+name: emotion_cover
+canvas: { width: 1080, height: 1440 }
+background: { color: "#1a1b25" }
+font:
+  regular: SourceHanSansSC-Regular.otf
+  bold: SourceHanSansSC-Bold.otf
+slots:
+  - id: accent_bar
+    type: rect
+    box: { x: 480, y: 380, width: 120, height: 10 }
+    color: "#4b3fe3"
+  - id: headline
+    type: text
+    box: { x: 90, y: 440, width: 900, height: 560 }
+    font: { size: 96, weight: bold, color: "#ffffff", line_height: 1.3 }
+    align: center
+    valign: middle
+    shrink_to_fit: true
+  - id: footer
+    type: text
+    box: { x: 90, y: 1290, width: 900, height: 60 }
+    font: { size: 32, weight: regular, color: "#5b5e6e", line_height: 1.2 }
+    align: center
+    valign: middle

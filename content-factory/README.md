@@ -1,8 +1,7 @@
 # content-factory · 双端内容工厂
 
 公众号 + 小红书双端矩阵内容系统。上游事实来源：《双端内容工厂 · 开发计划书 v1.3》。
-本仓库当前进度：**P1 小红书文本生成**（P0 平台抽象 + M5 扩展 XhsNote + M7 文案适配，
-platform=wechat/xhs 双端）。
+本仓库当前进度：**P2 图文合成**（M7 出图 + 共享图文服务 imaging，双端文本链路 P0/P1 已就绪）。
 
 > P-1a 已完成：8 表建表、采集/调度/备份/告警/雷达分析就位，`topics` 表有 radar 选题可供生成测试。
 
@@ -72,22 +71,44 @@ wechat 回归、适配器单元（标签去重去 #）。
 真实 Key 质量验收（连续 3 篇按量规打勾）通过后，固定 5 个代表性 topic 快照到
 `tests/golden/` 作为回归基线；mock 模式下不产出 golden set。
 
+## P2 验收脚本（可重复运行，无 Key 走 mock，不依赖外网与系统字体）
+
+```bash
+.venv/Scripts/python tests/test_p2.py        # 离线全量验证（mock 端到端出图 + 版式单测）
+```
+
+`test_p2.py` 覆盖：端到端 mock 生成 platform=xhs 自动出图（1 封面 + ≥2 金句图，
+`01_cover.png`… 编号、assets 登记 kind/尺寸/路径）、中文无乱码无截断（emoji 剥离、
+超长自动缩字号、折行宽度）、重复生成不残留（开新行新目录干净、旧目录保留、
+`render_assets` 替换旧行不重复登记）、`wechat_cover` 900×383 独立渲染、
+`checklist_card` 独立渲染、字体缺失 → failed 且提示放置方法、wechat 回归（不出图）。
+
 ### 端到端 curl 验收（需起服务）
 
 ```bash
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
-# 1. 小红书生成（未配 OPENAI_API_KEY 时自动走 mock 降级）
-curl -X POST "http://127.0.0.1:8000/api/topics/1/generate?platform=xhs"
-sqlite3 data/app.db "SELECT id,status,platform FROM articles WHERE platform='xhs' ORDER BY id DESC LIMIT 1;"
-# content 末尾已拼 #标签，可直接复制发布；meta 存 cover_note + image_plan
-# 2. 公众号生成（P0 回归）
-curl -X POST "http://127.0.0.1:8000/api/topics/1/generate?platform=wechat"
-# 2. 模板热更新（不重启即生效）
-sqlite3 data/app.db "UPDATE prompts SET template=REPLACE(template,'信息密度高','改过的文案') WHERE id=1;"
-curl -X POST "http://127.0.0.1:8000/api/topics/2/generate?platform=wechat"
-# 3. 重新生成开新行 + 旧行归档
-sqlite3 data/app.db "SELECT id,status FROM articles WHERE topic_id=1 ORDER BY id DESC;"
+.venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+# 1. 小红书生成（mock 降级）→ 自动出图
+curl --noproxy '*' -X POST "http://127.0.0.1:8000/api/topics/1/generate?platform=xhs"
+AID=$(sqlite3 data/app.db "SELECT id FROM articles WHERE platform='xhs' ORDER BY id DESC LIMIT 1;")
+ls "data/assets/$AID/"     # 01_cover.png、02_quote.png…
+sqlite3 data/app.db "SELECT kind,path,width,height FROM assets WHERE article_id=$AID;"
+# 2. 重新生成开新行 → 新目录干净、旧目录保留
+curl --noproxy '*' -X POST "http://127.0.0.1:8000/api/topics/1/generate?platform=xhs"
 ```
+
+## 配置要点（P2 新增）
+
+- `data/fonts/`：思源黑体 SC Regular/Bold（OFL 授权，随仓库分发，来源与校验值见
+  `data/fonts/README.md`）。imaging 只从这里加载字体，禁止依赖系统字体路径；
+  缺失时生成 xhs 落 `failed` 并在 error 提示放置方法，绝不静默出乱码图。
+- `data/imaging_templates/`：版式即数据（画布/背景/字体/字号/槽位/色值全在 YAML），
+  改版式不重启即生效。四套：`emotion_cover`（小红书封面 1080×1440）、`quote_card`
+  （金句卡片，生成链路用）、`checklist_card`（清单卡片，独立渲染验证，暂不接链路）、
+  `wechat_cover`（公众号封面 900×383，调用方 M6 后续接入）。
+- `CF_ASSETS_DIR` / `CF_FONTS_DIR` / `CF_IMAGING_TEMPLATES_DIR` / `CF_IMAGING_MIN_FONT_SIZE`：
+  输出目录与字号下限（默认 28），超长文案自动缩小字号而非截断。
+- 出图契约（SDD 5.7）：articles 与 assets 同一事务，出图失败（含字体缺失）article
+  整体 `failed`，不留"有文案无图"的半成品。
 
 ## 配置要点（P0 新增）
 
@@ -115,7 +136,10 @@ sqlite3 data/app.db "SELECT id,status FROM articles WHERE topic_id=1 ORDER BY id
 `api/routes_topics.py`、`schemas.py`（补 `WechatArticle`）、`prompts/wechat_article.yml`。
 P1 交付 `schemas.py`（补 `XhsNote`）、`adapters/xhs.py`（M7 文案适配）、
 `prompts/xhs_note.yml`（A1 种子）、`data/sensitive_xhs.txt`、`tests/test_p1.py`。
-其余模块（M2 采样、M6 草稿箱、PIL 图文合成（P2）、M8 素材包（P3））按路线图在后续阶段交付。
+P2 交付 `services/imaging.py`（共享图文服务）、`adapters/xhs.py` 的 `render_assets`
+（出图 + assets 登记）、`data/imaging_templates/` 四套版式、`data/fonts/` 思源黑体、
+`tests/test_p2.py`。
+其余模块（M2 采样、M6 草稿箱、M8 素材包（P3））按路线图在后续阶段交付。
 
 ## 定时任务（APScheduler）
 

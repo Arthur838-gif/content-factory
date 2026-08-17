@@ -1,0 +1,33 @@
+# 金句卡片版式（小红书，1080×1440）。主槽位：image_quotes 逐句渲染。
+# 大留白居中排版，底部领域署名槽（footer 由调用方传领域名，空则跳过）。
+name: quote_card
+canvas: { width: 1080, height: 1440 }
+background: { color: "#f6f7fb" }
+font:
+  regular: SourceHanSansSC-Regular.otf
+  bold: SourceHanSansSC-Bold.otf
+slots:
+  - id: quote_mark
+    type: text
+    text: "“"
+    box: { x: 80, y: 220, width: 200, height: 240 }
+    font: { size: 220, weight: bold, color: "#dcdcff", line_height: 1.0 }
+    align: left
+    valign: top
+  - id: quote
+    type: text
+    box: { x: 120, y: 480, width: 840, height: 480 }
+    font: { size: 72, weight: regular, color: "#1a1b25", line_height: 1.4 }
+    align: center
+    valign: middle
+    shrink_to_fit: true
+  - id: divider
+    type: rect
+    box: { x: 480, y: 1130, width: 120, height: 6 }
+    color: "#0e9f8a"
+  - id: footer
+    type: text
+    box: { x: 90, y: 1200, width: 900, height: 60 }
+    font: { size: 36, weight: regular, color: "#5b5e6e", line_height: 1.2 }
+    align: center
+    valign: middle

@@ -2,8 +2,10 @@
 
 P0：POST /api/topics/{id}/generate?platform=wechat（公众号 Markdown）。
 P1：platform=xhs（小红书笔记，M7 适配后正文末尾拼 #标签）。
+P2：xhs 成功后自动出图（M7 调共享图文服务，1 封面 + N 金句图，登记 assets；
+出图失败 article 整体 failed——SDD 5.7 articles 与 assets 同一事务）。
 五段式链路：选题 → 选模板（M4 现读库）→ LLM/Mock（M5）→ JSON 校验 → 适配落库。
-公众号 HTML 渲染与草稿箱推送属 M6、PIL 图文合成属 P2，均不做。
+公众号 HTML 渲染与草稿箱推送属 M6、素材包 ZIP 与预览页属 P3，均不做。
 """
 import logging
 
@@ -16,7 +18,7 @@ from ..adapters import xhs as xhs_adapter
 from ..db import session_scope
 from ..models import Article, TagLibrary, Topic
 from ..schemas import WechatArticle, XhsNote
-from ..services import generator, prompt_engine
+from ..services import generator, imaging, prompt_engine
 from ..services.prompt_engine import PromptNotFoundError, TemplateRenderError
 
 logger = logging.getLogger(__name__)
@@ -196,6 +198,21 @@ def generate(
         session.add(article)
         session.flush()  # 拿 article.id
         article_id = article.id
+        if status == "ready" and platform == "xhs":
+            # P2：图文合成在落库事务内执行（SDD 5.7 不留"有文章无资产"的半成品）；
+            # 出图失败（含字体缺失）→ article 整体 failed，与 LLM 失败同一落库语义。
+            try:
+                xhs_adapter.render_assets(
+                    session,
+                    article_id,
+                    cover_note=meta.get("cover_note") or "",
+                    image_plan=meta.get("image_plan") or [],
+                    footer_text=variables.get("domain") or "",
+                )
+            except imaging.ImagingError as exc:
+                status = "failed"
+                article.status = "failed"
+                article.error = error = f"图文合成失败：{exc}"
         # topic 首次触发生成 → used
         session.execute(
             update(Topic).where(Topic.id == topic_id, Topic.status == "new").values(status="used")

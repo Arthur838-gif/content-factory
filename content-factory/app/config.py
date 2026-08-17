@@ -79,6 +79,17 @@ LLM_PRICE_OUTPUT_PER_M = float(os.environ.get("CF_LLM_PRICE_OUTPUT", "0.50"))
 # mock 仅用于跑通链路结构，真实 Key 配置后自动走真实 HTTP 调用，两路径并列、由开关分流。
 LLM_MOCK = os.environ.get("CF_LLM_MOCK", "0") == "1" or not OPENAI_API_KEY
 
+# ---- 图文合成（M6 / M7 共用共享服务，P2 起；计划书 6.3）----
+# 版式即数据：画布/背景/字体/字号/槽位/色值全部在 data/imaging_templates/*.yml，不散落代码。
+FONTS_DIR = Path(os.environ.get("CF_FONTS_DIR", str(DATA_DIR / "fonts")))
+IMAGING_TEMPLATES_DIR = Path(
+    os.environ.get("CF_IMAGING_TEMPLATES_DIR", str(DATA_DIR / "imaging_templates"))
+)
+ASSETS_DIR = Path(os.environ.get("CF_ASSETS_DIR", str(DATA_DIR / "assets")))
+IMAGING_COVER_TEMPLATE = os.environ.get("CF_IMAGING_COVER_TEMPLATE", "emotion_cover")
+IMAGING_QUOTE_TEMPLATE = os.environ.get("CF_IMAGING_QUOTE_TEMPLATE", "quote_card")
+IMAGING_MIN_FONT_SIZE = int(os.environ.get("CF_IMAGING_MIN_FONT_SIZE", "28"))  # 超长缩字号的下限
+
 # ---- 敏感词表（第 6.2 节，双端词表分离）----
 SENSITIVE_FILE_WECHAT = Path(os.environ.get("CF_SENSITIVE_WECHAT", str(DATA_DIR / "sensitive_wechat.txt")))
 SENSITIVE_FILE_XHS = Path(os.environ.get("CF_SENSITIVE_XHS", str(DATA_DIR / "sensitive_xhs.txt")))
