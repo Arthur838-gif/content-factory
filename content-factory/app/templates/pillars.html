@@ -11,7 +11,7 @@
 <td><div class="actions">
 <button class="secondary" onclick="renamePillar({{ p.id }}, this)">改名</button>
 <button class="secondary" onclick="togglePillar({{ p.id }}, {{ 'false' if p.active else 'true' }}, this)">{{ '停用' if p.active else '启用' }}</button>
-{% if not planned.get(p.id) %}<button class="secondary" onclick="delPillar({{ p.id }}, this)">删除</button>{% endif %}
+<button class="secondary" onclick="delPillar({{ p.id }}, this)">删除</button>
 </div></td></tr>
 {% set th = themes.get(p.id) %}{% if th %}<tr class="muted"><td colspan="6" style="background:var(--bg,#f8f8f8)">
 <strong>本周主题</strong>：{{ th.theme or '（空）' }} <span class="badge {{ 'ready' if th.status == 'confirmed' else 'failed' }}">{{ '已确认' if th.status == 'confirmed' else '待确认' }}</span>
@@ -69,7 +69,7 @@ async function togglePillar(id, active, btn) {
   if (r.ok) location.reload(); else alert((await r.json()).detail || '操作失败');
 }
 async function delPillar(id, btn) {
-  if (!confirm('确认删除该栏目？')) return;
+  if (!confirm('确认删除该栏目？其名下未生成文章的排期选题和周主题会一并删除（工作台同步清理）；已生成过文章的栏目无法删除，只能停用。')) return;
   const r = await fetch(`/api/pillars/${id}`, {method: 'DELETE'});
   if (r.ok) location.reload(); else alert((await r.json()).detail || '删除失败');
 }

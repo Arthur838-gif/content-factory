@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..models import Pillar, Topic
+from ..models import Article, Pillar, Topic, WeekTheme
 from ..services import pillar as pillar_service
 
 logger = logging.getLogger(__name__)
@@ -69,19 +69,38 @@ def update_pillar(pillar_id: int, body: PillarIn) -> dict:
 
 @router.delete("/pillars/{pillar_id}")
 def delete_pillar(pillar_id: int) -> dict:
-    """删除栏目（仅限无排期选题；有历史选题请改 active=false 停用）。"""
+    """删除栏目，连带清理它名下未生成文章的排期选题与周主题（工作台同步消失）。
+
+    选题已有生成文章时拒绝删除（保留内容历史，请改用停用）。
+    """
     with session_scope() as session:
         row = session.get(Pillar, pillar_id)
         if row is None:
             raise HTTPException(404, f"栏目 {pillar_id} 不存在")
-        used_ids = {
-            (t.evidence or {}).get("pillar_id")
-            for t in session.scalars(select(Topic).where(Topic.source == "pillar")).all()
-        }
-        if pillar_id in used_ids:
-            raise HTTPException(409, "该栏目已有排期选题，请改为停用（active=false）")
+        topics = [
+            t for t in session.scalars(select(Topic).where(Topic.source == "pillar")).all()
+            if (t.evidence or {}).get("pillar_id") == pillar_id
+        ]
+        article_count = 0
+        for t in topics:
+            article_count += len(
+                session.scalars(select(Article.id).where(Article.topic_id == t.id)).all()
+            )
+        if article_count:
+            raise HTTPException(
+                409,
+                f"该栏目选题已有 {article_count} 篇生成文章，删除会丢失内容历史；"
+                "请改为停用（active=false）",
+            )
+        for t in topics:
+            session.delete(t)
+        for theme in session.scalars(
+            select(WeekTheme).where(WeekTheme.pillar_id == pillar_id)
+        ).all():
+            session.delete(theme)
+        session.flush()  # 先落选题/主题的删除，避免 week_themes 外键挡住栏目删除
         session.delete(row)
-        return {"deleted": pillar_id}
+        return {"deleted": pillar_id, "topics_removed": len(topics)}
 
 
 @router.post("/pillars/plan")

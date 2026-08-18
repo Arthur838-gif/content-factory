@@ -163,8 +163,20 @@ def main() -> int:
     check("停用栏目不参与排期", all(x["pillar"] != "AI工具深挖" for x in plan3), str(plan3))
     queries2 = xhs_sample.XhsSampleCollector()._queries()
     check("停用后采样词只剩启用栏目", queries2 == ["AI工具", "AIGC"], str(queries2))
-    r4 = client.delete(f"/api/pillars/{pid_c}")
-    check("有排期选题的栏目拒绝删除（409）", r4.status_code == 409, str(r4.status_code))
+    # 级联删除：带排期选题（未生成文章）的栏目可删，选题一并清理（工作台同步）
+    r_cas = client.post("/api/pillars", json={"name": "级联删除验证", "angle": "x",
+        "domain": "AI与编程", "slots_per_week": 1, "keywords": [], "active": True})
+    pid_x = r_cas.json()["id"]
+    with session_scope() as session:
+        session.add(Topic(title="占位", angle="", domain="AI与编程", source="pillar",
+                          status="new", evidence={"pillar_id": pid_x}))
+    r4 = client.delete(f"/api/pillars/{pid_x}")
+    with session_scope() as session:
+        x_topics = session.scalars(
+            select(Topic).where(Topic.source == "pillar", Topic.title == "占位")).all()
+    check("带无文章选题的栏目删除级联 200 且选题清理",
+          r4.status_code == 200 and r4.json().get("topics_removed") == 1 and not x_topics,
+          str(r4.json()))
     r5 = client.post("/api/pillars", json={"name": "临时栏目", "keywords": []})
     r6 = client.delete(f"/api/pillars/{r5.json()['id']}")
     check("无排期选题的栏目可删除", r6.status_code == 200, str(r6.status_code))
