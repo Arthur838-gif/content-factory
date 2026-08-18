@@ -308,3 +308,22 @@ def archive_topic(topic_id: int) -> dict:
             raise HTTPException(404, f"topic {topic_id} 不存在")
         topic.status = "archived"
         return {"id": topic_id, "status": "archived"}
+
+
+class TitleIn(BaseModel):
+    title: str
+
+
+@router.put("/topics/{topic_id}/title")
+def rename_topic(topic_id: int, body: TitleIn) -> dict:
+    """改选题标题：排期标题是自动生成的（栏目名/子话题），与最终成文标题
+    不必一致——编辑在发布前按平台调性改标题，生成时即用新标题。"""
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(422, "标题不能为空")
+    with session_scope() as session:
+        topic = session.get(Topic, topic_id)
+        if topic is None:
+            raise HTTPException(404, f"topic {topic_id} 不存在")
+        topic.title = title[:512]
+        return {"id": topic_id, "title": topic.title}

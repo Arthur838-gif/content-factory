@@ -33,7 +33,7 @@
 <td><span class="badge">{{ topic.domain or '—' }}</span></td>
 <td>{% set rows=latest.get(topic.id,{}) %}{% for platform,article in rows.items() %}<a class="badge {{ article.status }}" href="/articles/{{ article.id }}">{{ platform }} · {{ article.status }}</a> {% else %}<span class="muted">未生成</span>{% endfor %}</td>
 <td>{% if topic.expires_at %}{{ topic.expires_at.strftime('%m-%d %H:%M') }}{% else %}<span class="muted">不适用</span>{% endif %}</td>
-<td><div class="actions"><button onclick="generate({{ topic.id }},'wechat',this)">生成公众号</button><button onclick="generate({{ topic.id }},'xhs',this)">生成小红书</button><button class="secondary" onclick="archiveTopic({{ topic.id }}, this)" title="移出排期，让位给按主题重排的新选题">归档</button></div></td></tr>{% endfor %}
+<td><div class="actions"><button class="secondary" onclick="renameTopic({{ topic.id }}, this)">改标题</button><button onclick="generate({{ topic.id }},'wechat',this)">生成公众号</button><button onclick="generate({{ topic.id }},'xhs',this)">生成小红书</button><button class="secondary" onclick="archiveTopic({{ topic.id }}, this)" title="移出排期，让位给按主题重排的新选题">归档</button></div></td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">本周尚未排期。到 <a href="/pillars">内容栏目</a> 点「生成本周计划」。</p>{% endif %}
 </div>
@@ -50,7 +50,7 @@
 <td><span class="badge {{ topic.status }}">{{ topic.status }}</span></td>
 <td>{% if topic.expires_at %}{% if topic.expires_at < now %}<span class="badge failed">已过期</span>{% else %}{{ topic.expires_at.strftime('%m-%d %H:%M') }}{% endif %}{% else %}<span class="muted">不适用</span>{% endif %}</td>
 <td>{% set rows=latest.get(topic.id,{}) %}{% for platform,article in rows.items() %}<a class="badge {{ article.status }}" href="/articles/{{ article.id }}">{{ platform }} · {{ article.status }}</a> {% else %}<span class="muted">暂无</span>{% endfor %}</td>
-<td><div class="actions"><button onclick="generate({{ topic.id }},'wechat',this)">生成公众号</button><button onclick="generate({{ topic.id }},'xhs',this)">生成小红书</button></div></td></tr>{% endfor %}
+<td><div class="actions"><button class="secondary" onclick="renameTopic({{ topic.id }}, this)">改标题</button><button onclick="generate({{ topic.id }},'wechat',this)">生成公众号</button><button onclick="generate({{ topic.id }},'xhs',this)">生成小红书</button></div></td></tr>{% endfor %}
 </tbody></table></div>{% else %}<div class="card muted">暂无灵感选题，去 <a href="/viral">素材采样</a> 触发采集。</div>{% endif %}
 <script>
 async function archiveTopic(id, btn) {
@@ -58,6 +58,14 @@ async function archiveTopic(id, btn) {
   btn.disabled = true;
   const r = await fetch(`/api/topics/${id}/archive`, {method: 'PUT'});
   if (r.ok) location.reload(); else alert('归档失败：' + (((await r.json().catch(() => ({}))).detail) || r.status));
+}
+async function renameTopic(id, btn) {
+  const current = btn.closest('tr').querySelector('td strong').textContent.trim();
+  const title = prompt('修改选题标题（生成文案时即用新标题；排期标题只是自动占位，可按本周内容改）：', current);
+  if (title === null || title.trim() === current) return;
+  const r = await fetch(`/api/topics/${id}/title`, {method: 'PUT',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({title})});
+  if (r.ok) location.reload(); else alert('修改失败：' + (((await r.json().catch(() => ({}))).detail) || r.status));
 }
 </script>
 {% endblock %}

@@ -301,6 +301,16 @@ def main() -> int:
     check("归档后 plan 不被归档选题挡住，按主题重建 2 期",
           len(d10["created"]) == 2 and not d10.get("warning"), str(d10))
 
+    print("\n[14] 选题标题可编辑（排期标题只是占位，成文前可改）")
+    tid14 = d10["created"][0]["id"]
+    rt = client.put(f"/api/topics/{tid14}/title", json={"title": "  省下百万预算的AI大片工作流  "})
+    check("改标题 200 且去空白", rt.status_code == 200 and rt.json()["title"] == "省下百万预算的AI大片工作流",
+          str(rt.json()))
+    re_ = client.put(f"/api/topics/{tid14}/title", json={"title": "   "})
+    check("空标题 422", re_.status_code == 422, str(re_.status_code))
+    home14 = client.get("/")
+    check("工作台显示新标题", home14.status_code == 200 and "省下百万预算的AI大片工作流" in home14.text)
+
     print()
     if FAILURES:
         print(f"FAIL：{len(FAILURES)} 项未通过")
