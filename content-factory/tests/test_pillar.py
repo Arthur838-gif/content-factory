@@ -13,6 +13,7 @@
   8. P5b 主题排期：按子话题分期 + 期数编号 + 幂等
   9. P5b 生成系列上下文（主题/期数/其他期/合集枢纽）+ 选题归档
  10. P5b 合集素材不足拦截（防模型虚构内容）
+ 11. P5b 按主题重排：归档未按主题的旧选题并按主题重新分期
 
 运行：.venv/Scripts/python tests/test_pillar.py
 """
@@ -248,6 +249,45 @@ def main() -> int:
     d6 = next(x for x in plan6 if x["pillar"] == "无素材栏目")
     check("素材不足不建合集、返回 warning", not d6["created"] and "素材" in d6.get("warning", ""),
           str(d6))
+
+    print("\n[12] P5b 按主题重排：旧选题归档 + 按主题重排 / 提示引导")
+    r12 = client.post("/api/pillars", json={
+        "name": "重排测试", "angle": "先排旧模式再切主题", "domain": "AI与编程",
+        "slots_per_week": 2, "keywords": ["AI工具", "AIGC"], "active": True})
+    pid_r = r12.json()["id"]
+    plan7 = client.post("/api/pillars/plan").json()
+    d7 = next(x for x in plan7 if x["pillar"] == "重排测试")
+    check("未确认主题时按旧模式排满 2 期", len(d7["created"]) == 2
+          and all("｜" in c["title"] for c in d7["created"]), str(d7["created"]))
+    client.post(f"/api/pillars/{pid_r}/theme")
+    with session_scope() as session:
+        a1 = session.scalars(select(HotItem).where(HotItem.url == "https://xhs/a1")).one()
+        a1_id = a1.id
+    client.put(f"/api/pillars/{pid_r}/theme", json={
+        "theme": "重排主题周", "subtopics": [
+            {"title": "效率工具怎么选", "hot_item_ids": [a1_id]},
+            {"title": "工作流组合思路", "hot_item_ids": []}]})
+    plan8 = client.post("/api/pillars/plan").json()
+    d8 = next(x for x in plan8 if x["pillar"] == "重排测试")
+    check("确认主题后普通 plan 不动旧选题、返回重排提示",
+          not d8["created"] and "按主题重排" in d8.get("warning", ""), str(d8))
+    plan9 = client.post("/api/pillars/plan?pillar_id=%d&replan_theme=true" % pid_r).json()
+    d9 = plan9[0]
+    check("重排归档 2 条旧选题并按主题重建 2 期",
+          d9.get("archived_legacy") == 2 and len(d9["created"]) == 2, str(d9))
+    with session_scope() as session:
+        rows = [t for t in session.scalars(select(Topic).where(Topic.source == "pillar")).all()
+                if (t.evidence or {}).get("pillar_id") == pid_r]
+        active = [t for t in rows if t.status != "archived"]
+        archived = [t for t in rows if t.status == "archived"]
+        check("旧 2 期已 archived，在库 2 期带子话题标记",
+              len(archived) == 2 and len(active) == 2
+              and all((t.evidence or {}).get("subtopic") for t in active)
+              and [t.title for t in active] == ["重排测试第1期｜效率工具怎么选", "重排测试第2期｜工作流组合思路"],
+              str([(t.title, t.status) for t in rows]))
+    page_r = client.get("/pillars")
+    check("重排后 /pillars 计划数不含归档（2 期）",
+          page_r.status_code == 200 and "按主题重排（归档本周旧选题）" in page_r.text)
 
     print()
     if FAILURES:

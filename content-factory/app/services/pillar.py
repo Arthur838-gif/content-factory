@@ -190,17 +190,31 @@ def confirm_week_theme(
     return row
 
 
-def plan_pillar_week(session, pillar: Pillar, now: datetime | None = None) -> dict:
+def plan_pillar_week(
+    session, pillar: Pillar, now: datetime | None = None, replan_theme: bool = False
+) -> dict:
     """为单个栏目生成本周选题（幂等：重复调用只补缺口，不重复建）。
 
     返回 {pillar, created: [topic...], existing: 本周已有期数, warning?}。
     P5b：深挖档优先按已确认的周主题分期（期数编号 + 子话题互补）；
     合集档素材不足门槛时不建题（防模型虚构内容），返回 warning。
+    replan_theme=True 且本周已确认主题时，先归档未按主题排期的旧选题
+    （evidence 无 subtopic 标记）再重排——"按主题重排"一键动作。
     """
     now = now or datetime.now()
     week_start, week_end = week_bounds(now)
     week_topics = _week_pillar_topics(session, week_start)
     existing = [t for t in week_topics if (t.evidence or {}).get("pillar_id") == pillar.id]
+    theme_row = confirmed_week_theme(session, pillar.id, week_start)
+
+    archived_legacy = 0
+    if replan_theme and theme_row is not None:
+        # 只归档"没按主题排"的旧选题（无 subtopic 标记）；已按主题的期保留
+        for t in existing:
+            if not (t.evidence or {}).get("subtopic"):
+                t.status = "archived"
+                archived_legacy += 1
+        existing = [t for t in existing if t.status != "archived"]
     # 素材去重只在同栏目内生效：合集档引用过的素材，深挖档仍可单独立题
     # （合集是"参考清单"，深挖是"单独立题"，编辑上复用同一素材是合理的）
     used_urls = {
@@ -211,7 +225,6 @@ def plan_pillar_week(session, pillar: Pillar, now: datetime | None = None) -> di
 
     matched = _matched_pool(session, pillar, week_start)
     by_id = {item.id: (item, kw) for item, kw in matched}
-    theme_row = confirmed_week_theme(session, pillar.id, week_start)
     week_theme = theme_row.theme if theme_row else ""
 
     created: list[Topic] = []
@@ -329,10 +342,25 @@ def plan_pillar_week(session, pillar: Pillar, now: datetime | None = None) -> di
             created.append(topic)
             used_urls.add(item.url)
             need -= 1
-    return {"pillar": pillar.name, "created": created, "existing": len(existing)}
+    result = {"pillar": pillar.name, "created": created, "existing": len(existing)}
+    if archived_legacy:
+        result["archived_legacy"] = archived_legacy
+    if (
+        theme_row is not None and not replan_theme and slots > 1
+        and any(not (t.evidence or {}).get("subtopic") for t in existing)
+    ):
+        result["warning"] = (
+            "本周已确认主题，但排期里仍是未按主题的旧选题；"
+            "点「按主题重排」归档旧选题并按主题重新分期"
+        )
+    return result
 
 
-def plan_week(pillar_id: int | None = None, now: datetime | None = None) -> list[dict]:
+def plan_week(
+    pillar_id: int | None = None,
+    now: datetime | None = None,
+    replan_theme: bool = False,
+) -> list[dict]:
     """排期入口（API / 手动触发调用）：全部启用栏目或指定栏目。"""
     with session_scope() as session:
         if pillar_id is not None:
@@ -346,7 +374,7 @@ def plan_week(pillar_id: int | None = None, now: datetime | None = None) -> list
         for pillar in pillars:
             if not pillar.active and pillar_id is None:
                 continue
-            result = plan_pillar_week(session, pillar, now=now)
+            result = plan_pillar_week(session, pillar, now=now, replan_theme=replan_theme)
             results.append(
                 {
                     "pillar": result["pillar"],
@@ -354,6 +382,8 @@ def plan_week(pillar_id: int | None = None, now: datetime | None = None) -> list
                         {"id": t.id, "title": t.title} for t in result["created"]
                     ],
                     "existing": result["existing"],
+                    **({"archived_legacy": result["archived_legacy"]}
+                       if result.get("archived_legacy") else {}),
                     **({"warning": result["warning"]} if result.get("warning") else {}),
                 }
             )

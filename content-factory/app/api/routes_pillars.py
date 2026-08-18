@@ -85,14 +85,18 @@ def delete_pillar(pillar_id: int) -> dict:
 
 
 @router.post("/pillars/plan")
-def plan_pillars(pillar_id: int | None = None) -> list[dict]:
+def plan_pillars(
+    pillar_id: int | None = None, replan_theme: bool = False
+) -> list[dict]:
     """生成本周内容计划：全部启用栏目，或指定栏目（body 可省）。
 
     幂等：重复调用只补缺口（多期档）/ 直接跳过（周更档）。
     深挖栏目若已确认本周主题，则按主题子话题分期（P5b）。
+    replan_theme=true：一键按主题重排——先归档未按主题排期的旧选题再补齐
+    （用于本周已有旧排期、确认主题后想整体套用主题的场景）。
     """
     try:
-        return pillar_service.plan_week(pillar_id=pillar_id)
+        return pillar_service.plan_week(pillar_id=pillar_id, replan_theme=replan_theme)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from None
 

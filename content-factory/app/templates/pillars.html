@@ -16,7 +16,8 @@
 <strong>本周主题</strong>：{{ th.theme or '（空）' }} <span class="badge {{ 'ready' if th.status == 'confirmed' else 'failed' }}">{{ '已确认' if th.status == 'confirmed' else '待确认' }}</span>
 {% if th.subtopics %}<br>子话题分期：{% for s in th.subtopics %}{{ loop.index }}. {{ s.title }}　{% endfor %}{% endif %}
 <br><button class="secondary" onclick="genTheme({{ p.id }}, this)">重新生成主题</button>
-{% if th.status != 'confirmed' %}<button class="secondary" onclick="confirmTheme({{ p.id }}, this)">确认并按主题排期</button>{% endif %}
+{% if th.status != 'confirmed' %}<button class="secondary" onclick="confirmTheme({{ p.id }}, this)">确认并按主题排期</button>
+{% elif planned.get(p.id) %}<button class="secondary" onclick="replanTheme({{ p.id }}, this)">按主题重排（归档本周旧选题）</button>{% endif %}
 </td></tr>{% elif p.slots_per_week > 1 %}<tr class="muted"><td colspan="6" style="background:var(--bg,#f8f8f8)">
 <strong>本周主题</strong>：未规划 <button class="secondary" onclick="genTheme({{ p.id }}, this)">从本周素材生成主题建议</button> <span class="muted">确认后深挖各期围绕同一主题展开（推荐）</span>
 </td></tr>{% endif %}
@@ -67,20 +68,36 @@ async function planWeek(btn) {
     const r = await fetch('/api/pillars/plan', {method: 'POST'});
     const d = await r.json();
     if (!r.ok) { alert(d.detail || '排期失败'); return; }
-    const summary = d.map(x => `${x.pillar}：新增 ${x.created.length} 期${x.warning ? '（⚠ ' + x.warning + '）' : ''}`).join('；');
+    const summary = d.map(x => `${x.pillar}：新增 ${x.created.length} 期`
+      + (x.archived_legacy ? `，归档旧选题 ${x.archived_legacy} 条` : '')
+      + (x.warning ? '（⚠ ' + x.warning + '）' : '')).join('；');
     alert('本周计划：' + (summary || '无启用栏目'));
     location.href = '/';
   } finally { btn.disabled = false; btn.textContent = '生成本周计划（全部启用栏目）'; }
 }
 async function genTheme(id, btn) {
+  const original = btn.textContent;
   btn.disabled = true; btn.textContent = '生成中…（读素材 + LLM 归纳，约半分钟）';
   try {
-    const r = await fetch(`/api/pillars/${id}/theme`, {method: 'POST'});
+    // keepalive：离开页面后请求仍送达并落库，回来刷新就能看到建议，不必重新生成
+    const r = await fetch(`/api/pillars/${id}/theme`, {method: 'POST', keepalive: true});
     const d = await r.json();
     if (!r.ok) { alert(d.detail || '主题生成失败'); return; }
     alert(`主题建议：${d.theme}\n\n子话题：\n` + d.subtopics.map((s, i) => `${i + 1}. ${s.title}`).join('\n') + '\n\n确认后才按主题排期。');
     location.reload();
-  } finally { btn.disabled = false; btn.textContent = '重新生成主题'; }
+  } finally { btn.disabled = false; btn.textContent = original; }
+}
+async function replanTheme(id, btn) {
+  if (!confirm('将归档本周未按主题排期的旧选题，并按已确认主题重新分期，继续？')) return;
+  btn.disabled = true; btn.textContent = '重排中…';
+  try {
+    const r = await fetch('/api/pillars/plan?pillar_id=' + id + '&replan_theme=true', {method: 'POST'});
+    const d = await r.json();
+    if (!r.ok) { alert((Array.isArray(d) ? d : d.detail) || '重排失败'); return; }
+    const x = d[0] || {};
+    alert(`按主题重排完成：归档旧选题 ${x.archived_legacy || 0} 条，新增 ${x.created.length} 期${x.warning ? '\n⚠ ' + x.warning : ''}`);
+    location.href = '/';
+  } finally { btn.disabled = false; btn.textContent = '按主题重排（归档本周旧选题）'; }
 }
 async function confirmTheme(id, btn) {
   btn.disabled = true;

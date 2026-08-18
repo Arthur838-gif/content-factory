@@ -122,6 +122,8 @@ def pillars_page(request: Request):
         for topic in session.scalars(
             select(Topic).where(Topic.source == "pillar", Topic.created_at >= week_start)
         ).all():
+            if topic.status == "archived":
+                continue  # 按主题重排归档的旧选题不占本周档位
             pid = (topic.evidence or {}).get("pillar_id")
             if pid is not None:
                 planned[pid] = planned.get(pid, 0) + 1
