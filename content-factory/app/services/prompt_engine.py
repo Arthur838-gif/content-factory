@@ -24,7 +24,14 @@ logger = logging.getLogger(__name__)
 
 # 种子文件目录与文件名约定（计划书第 3 章：prompts/*.yml）
 SEED_DIR = Path(config.PROJECT_ROOT / "prompts")
-SEED_FILES = ["wechat_article.yml", "xhs_note.yml", "xhs_teardown.yml"]  # P0 A2 / P1 A1 / P-1b A3
+SEED_FILES = [  # P0 A2 / P1 A1 / P-1b A3 / P6 标题打分与多平台改写
+    "wechat_article.yml",
+    "xhs_note.yml",
+    "xhs_teardown.yml",
+    "xhs_title_score.yml",
+    "xhs_rewrite.yml",
+    "wechat_rewrite.yml",
+]
 
 # 沙箱渲染：禁用除 Jinja 内置 for/if 之外的扩展，禁止访问对象属性/危险调用
 _env = SandboxedEnvironment(

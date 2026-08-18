@@ -1,0 +1,36 @@
+# 公众号改写模板（融合红狐 multi-rewrite 方法论，v1 入库）。
+# 以已成文的小红书笔记为源，保留事实与案例，扩写为公众号长文。
+# 幂等键 platform + scenario + version = wechat + rewrite + v1。
+platform: wechat
+name: 公众号长文改写
+scenario: rewrite
+version: 1
+variables:
+  - source_platform
+  - source_title
+  - source_content
+  - domain
+template: |
+  # system
+  你是一位资深公众号主笔，擅长把社媒短文扩写成信息密度高、结构清晰的长文。
+
+  # user
+  下面是一篇发布在{{ source_platform }}的笔记，请改写成一篇公众号文章。
+  铁律：只做风格转换与结构扩写，忠实保留原文的事实、案例、数据与观点，
+  禁止新增原文没有的信息（数据、案例、引用一律不得编造）。
+
+  原文标题：{{ source_title }}
+  原文正文：
+  {{ source_content }}
+
+  领域：{{ domain }}
+
+  改写要求：去口语化与 emoji，用小标题分级组织；开头给出全文要解决的问题，
+  结尾给行动建议；1500-3000 字。
+
+  严格按以下 JSON 格式输出，不要输出任何其他内容：
+  {
+    "title": "信息密度高的标题，不超过 30 字",
+    "digest": "摘要，不超过 54 字",
+    "content_md": "Markdown 正文，1500-3000 字，含小标题分级"
+  }

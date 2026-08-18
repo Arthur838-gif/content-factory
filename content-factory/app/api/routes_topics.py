@@ -18,7 +18,7 @@ from ..adapters import xhs as xhs_adapter
 from ..db import session_scope
 from ..models import Article, TagLibrary, Topic
 from ..schemas import WechatArticle, XhsNote
-from ..services import generator, imagegen, imaging, prompt_engine
+from ..services import generator, imagegen, imaging, prompt_engine, titles
 from ..services.prompt_engine import PromptNotFoundError, TemplateRenderError
 
 logger = logging.getLogger(__name__)
@@ -212,7 +212,26 @@ def generate(
     # 2) 调 LLM / 走 mock（事务外，慢速外部 IO 不占事务）
     result = generator.generate(platform, schema_cls, system_msg, user_msg)
 
-    # 3) 落库：归档旧行 + 写新行 + topic → used（同一事务）
+    # 3) 落库（与改写共用）：适配 → 归档旧行 + 写新行 + 出图 + topic → used
+    return _persist_generation(
+        topic_id, platform, result, prompt_id_resolved, prompt_version_resolved, variables
+    )
+
+
+def _persist_generation(
+    topic_id: int,
+    platform: str,
+    result,
+    prompt_id_resolved: int,
+    prompt_version_resolved: int,
+    variables: dict,
+    extra_meta: dict | None = None,
+) -> GenerateResponse:
+    """生成/改写结果的落库共用段（SDD 4.2 / 5.7 同一语义）。
+
+    适配平台格式 → 两段式封面底图（事务外）→ 归档旧行 + 写新行 +
+    xhs 出图登记 assets + topic → used（同一事务）。
+    """
     art = result.article
     if result.ok and art is not None:
         status = "ready"
@@ -248,6 +267,9 @@ def generate(
         if cover:
             meta["cover_note"] = cover
         error = result.error or "生成失败"
+
+    if extra_meta:
+        meta.update(extra_meta)
 
     # 两段式封面第一段（事务外慢速 IO）：从文案归纳画面提示词 → cogview-4 底图；
     # 失败返回 None，第二段（PIL 叠字）回退纯色版式，绝不拖 failed
@@ -303,6 +325,87 @@ def generate(
     return GenerateResponse(
         article_id=article_id, status=status, platform=platform, error=error
     )
+
+
+_PLATFORM_LABEL = {"wechat": "公众号", "xhs": "小红书"}
+
+
+@router.post("/articles/{article_id}/rewrite", response_model=GenerateResponse)
+def rewrite_article(
+    article_id: int,
+    platform: str = Query(..., description="目标平台：wechat / xhs"),
+    prompt_id: int | None = Query(None),
+) -> GenerateResponse:
+    """以成文为源跨平台改写（融合红狐 xiaohongshu-rewrite / multi-rewrite）。
+
+    与从选题重新生成的区别：源是已成的文章，保留事实/案例/数据与观点，
+    只做平台风格转换（公众号长文 ↔ 小红书笔记），禁止新增原文没有的信息。
+    落库与 generate 同一语义（含 xhs 出图），meta 记 rewrite_from 溯源。
+    """
+    schema_cls = PLATFORM_SCHEMAS.get(platform)
+    if schema_cls is None:
+        raise HTTPException(400, f"暂不支持平台 {platform}；当前支持：{'、'.join(PLATFORM_SCHEMAS)}")
+    with session_scope() as session:
+        source = session.get(Article, article_id)
+        if source is None:
+            raise HTTPException(404, f"article {article_id} 不存在")
+        if source.status != "ready":
+            raise HTTPException(422, "只有 ready 状态的文章可以改写")
+        if source.platform == platform:
+            raise HTTPException(422, f"已是{_PLATFORM_LABEL.get(platform, platform)}文章；换风格请用「重新生成」")
+        topic = session.get(Topic, source.topic_id)
+        if topic is None:
+            raise HTTPException(404, f"topic {source.topic_id} 不存在")
+        if _has_unarchived_published(session, topic.id, platform):
+            raise HTTPException(409, f"topic {topic.id} 在 {platform} 已有 published 终态行")
+        tag_rows = session.scalars(
+            select(TagLibrary.tag)
+            .where(TagLibrary.domain == (topic.domain or ""))
+            .order_by(desc(TagLibrary.heat))
+            .limit(10)
+        ).all()
+        variables = {
+            "source_platform": _PLATFORM_LABEL.get(source.platform, source.platform),
+            "source_title": source.title or "",
+            "source_content": (source.content or "")[:6000],
+            "domain": topic.domain or "",
+            "tag_candidates": list(tag_rows),
+        }
+        try:
+            prompt, system_msg, user_msg = prompt_engine.render_messages(
+                session, platform, "rewrite", variables, prompt_id=prompt_id
+            )
+        except PromptNotFoundError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except TemplateRenderError as exc:
+            raise HTTPException(500, f"模板渲染失败：{exc}") from exc
+    result = generator.generate(platform, schema_cls, system_msg, user_msg)
+    logger.info("改写完成 source=%s → %s", article_id, platform)
+    return _persist_generation(
+        topic.id, platform, result, prompt.id, prompt.version, variables,
+        extra_meta={"rewrite_from": article_id},
+    )
+
+
+class TitleScoreIn(BaseModel):
+    title: str
+    keyword: str = ""
+
+
+@router.post("/titles/score")
+def score_title(body: TitleScoreIn) -> dict:
+    """小红书标题六维加权打分（融合红狐 xiaohongshu-title-score 方法论）。
+
+    无状态评审：主题匹配度15% + 结构合规度20% + 利益清晰度25% +
+    情绪唤醒度20% + 稀缺性感知15% + 合规安全性5%，S/A/B/C 分级，
+    附问题清单与改写版标题。
+    """
+    try:
+        return titles.score(body.title, body.keyword)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except Exception as exc:
+        raise HTTPException(502, f"标题打分失败：{exc}") from exc
 
 
 @router.put("/topics/{topic_id}/archive")

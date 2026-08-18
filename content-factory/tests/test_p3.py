@@ -146,9 +146,10 @@ def main() -> int:
     check("GET /prompts 200 且列出种子模板",
           resp.status_code == 200 and "wechat" in resp.text and "xhs" in resp.text)
     seeds = client.get("/api/prompts").json()
-    check("种子含 wechat+article、xhs+note 与 xhs+teardown（P-1b 加 A3）",
+    check("种子含 wechat+article、xhs+note 与 xhs+teardown（P-1b 加 A3；P6 另加 rewrite/title_score）",
           {(p["platform"], p["scenario"]) for p in seeds}
-          == {("wechat", "article"), ("xhs", "note"), ("xhs", "teardown")},
+          == {("wechat", "article"), ("xhs", "note"), ("xhs", "teardown"),
+              ("xhs", "title_score"), ("xhs", "rewrite"), ("wechat", "rewrite")},
           str([(p["platform"], p["scenario"], p["version"]) for p in seeds]))
     wechat_v1 = next(p for p in seeds if p["platform"] == "wechat")
     resp = client.post("/api/prompts", json={
