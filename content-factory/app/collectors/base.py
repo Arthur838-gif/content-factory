@@ -190,6 +190,10 @@ def persist_hot_items(session, items: list[HotItem], collector: str = "") -> Col
                     created += 1
                 else:
                     merged += 1
+        elif item.source == "github":
+            # P7：GitHub 项目是合集排期的真实素材（raw.keyword 命中栏目词），
+            # 不单独建灵感选题——英文仓库名对 radar 撞题/评分没有意义
+            pass
         else:
             outcome, _topic = radar.create_or_merge_topic(session, row, domain, keyword)
             if outcome == "created":

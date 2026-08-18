@@ -87,11 +87,18 @@ def _snapshot(item: HotItem, keyword: str) -> dict:
 
 
 def _matched_pool(session, pillar: Pillar, week_start: datetime) -> list[tuple[HotItem, str]]:
-    """本周命中栏目关键词的采样素材（点赞倒序），主题规划与排期共用。"""
+    """本周命中栏目关键词的采样素材（点赞倒序），主题规划与排期共用。
+
+    xhs 笔记（玩法/情绪素材）与 github 项目（P7 真实工具素材，star 数当热度）
+    同池：合集优先吃到真实项目，深挖也可能绑到开源项目（深挖一个项目也是好内容）。
+    """
     keywords = list(pillar.keywords or [])
     pool = session.scalars(
         select(HotItem)
-        .where(HotItem.captured_at >= week_start, HotItem.source == "xhs")
+        .where(
+            HotItem.captured_at >= week_start,
+            HotItem.source.in_(("xhs", "github")),
+        )
         .order_by(desc(HotItem.likes), desc(HotItem.id))
     ).all()
     return [(item, kw) for item in pool if (kw := _match_keyword(item, keywords))]

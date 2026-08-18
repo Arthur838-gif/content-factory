@@ -82,6 +82,14 @@ XHS_MCP_TIMEOUT_SECONDS = int(os.environ.get("CF_XHS_MCP_TIMEOUT", "30"))
 XHS_SAMPLE_KEYWORDS = [k.strip() for k in os.environ.get("CF_XHS_SAMPLE_KEYWORDS", "").split(",") if k.strip()]
 XHS_SAMPLE_MAX_QUERIES = int(os.environ.get("CF_XHS_SAMPLE_MAX_QUERIES", "20"))
 XHS_SAMPLE_INTERVAL_HOURS = int(os.environ.get("CF_XHS_SAMPLE_INTERVAL_HOURS", "6"))
+# GitHub 开源项目采集（P7：合集栏目的真实工具素材；未鉴权 10 次/分钟）
+GITHUB_MIN_STARS = int(os.environ.get("CF_GITHUB_MIN_STARS", "1000"))
+GITHUB_DAYS_PUSHED = int(os.environ.get("CF_GITHUB_DAYS_PUSHED", "180"))
+GITHUB_PER_QUERY = int(os.environ.get("CF_GITHUB_PER_QUERY", "10"))
+GITHUB_MAX_QUERIES = int(os.environ.get("CF_GITHUB_MAX_QUERIES", "5"))
+GITHUB_TIMEOUT_SECONDS = int(os.environ.get("CF_GITHUB_TIMEOUT", "30"))
+# 显式指定查询（逗号分隔；"中文词=查询" 或纯英文查询），留空走栏目关键词池映射
+GITHUB_QUERIES = [q.strip() for q in os.environ.get("CF_GITHUB_QUERIES", "").split(",") if q.strip()]
 # 周度 LLM 拆解（A3）：调度周期 cron 化，周一 06:00（本地时区）
 XHS_TEARDOWN_WEEKDAY = os.environ.get("CF_XHS_TEARDOWN_WEEKDAY", "mon")
 XHS_TEARDOWN_HOUR = int(os.environ.get("CF_XHS_TEARDOWN_HOUR", "6"))

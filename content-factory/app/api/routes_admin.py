@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from ..collectors import base as collectors_base
 from ..collectors import hotboard  # noqa: F401  注册 hotboard 采集器
 from ..collectors import xhs_sample  # noqa: F401  注册 xhs_sample 采样器（P-1b）
+from ..collectors import github_tools  # noqa: F401  注册 github_tools 采集器（P7）
 from ..services import radar
 
 logger = logging.getLogger(__name__)
