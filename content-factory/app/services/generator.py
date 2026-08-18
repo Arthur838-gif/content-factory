@@ -186,6 +186,10 @@ def _call_llm(system_msg: str, user_msg: str) -> tuple[str, dict]:
         "response_format": {"type": "json_object"},  # 强制 JSON mode
         "max_tokens": config.LLM_MAX_TOKENS,
     }
+    if config.LLM_DISABLE_THINKING:
+        # bigmodel GLM-4.5+ 参数：关思维链。产物是结构化 JSON 文案，不需要
+        # 思考段——省 token（思考与正文同额计费）、提速、杜绝思考烧尽额度
+        payload["thinking"] = {"type": "disabled"}
     with httpx.Client(timeout=config.LLM_TIMEOUT_SECONDS) as client:
         resp = client.post(url, headers=headers, json=payload)
         resp.raise_for_status()

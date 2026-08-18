@@ -107,6 +107,12 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-chat")
 # 思维链模型（glm-4.x）思考与正文共享 max_tokens，给足余量防正文被截空
 LLM_MAX_TOKENS = int(os.environ.get("CF_LLM_MAX_TOKENS", "8192"))
 LLM_TIMEOUT_SECONDS = int(os.environ.get("CF_LLM_TIMEOUT_SECONDS", "120"))
+# 思维链开关（bigmodel GLM-4.5+ 的 thinking 参数）：产物是结构化 JSON 文案，
+# 默认关掉思考段省 token 提速。auto=仅 glm 系模型带此参数；true/false 强制
+_thinking_mode = os.environ.get("CF_LLM_DISABLE_THINKING", "auto").lower()
+LLM_DISABLE_THINKING = _thinking_mode in ("true", "1", "yes") or (
+    _thinking_mode == "auto" and MODEL_NAME.lower().startswith("glm")
+)
 LLM_MAX_RETRIES = 2  # 重试封顶 2 次（1 次首发 + 2 次重试 = 最多 3 轮）
 LLM_RETRY_BACKOFF_SECONDS = float(os.environ.get("CF_LLM_RETRY_BACKOFF_SECONDS", "2"))  # 重试间隔（固定退避）
 # 单价（美元 / 每百万 token），用于 meta.usage.cost_est 估算；换供应商时改这里。
