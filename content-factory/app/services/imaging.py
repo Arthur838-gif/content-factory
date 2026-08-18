@@ -142,13 +142,34 @@ def _layout_text(draw, text: str, slot: dict, box_w: int, box_h: int):
         size = max(min_size, size - 4)
 
 
-def render(name: str, texts: dict[str, str]) -> Image.Image:
-    """按版式渲染一张图。texts 按 slot id 注入；slot 自带 text 字面量优先。"""
+def _scrim(img: Image.Image, x: int, y: int, w: int, h: int, alpha: int = 96) -> None:
+    """文字区压半透明深色蒙层（RGBA 合成，不产生硬边框感）。"""
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(overlay)
+    d.rectangle([x, y, x + w, y + h], fill=(10, 11, 20, alpha))
+    img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"), (0, 0))
+
+
+def render(
+    name: str, texts: dict[str, str], background_image: Image.Image | None = None
+) -> Image.Image:
+    """按版式渲染一张图。texts 按 slot id 注入；slot 自带 text 字面量优先。
+
+    background_image（两段式封面第一段的产物）：整图铺底替代纯色背景，文字槽位
+    区域先压一层半透明深色蒙层保对比度；仍走原槽位排版（字号自适应不截断）。
+    """
     tpl = load_template(name)
     canvas = tpl["canvas"]
     width, height = int(canvas["width"]), int(canvas["height"])
     bg = (tpl.get("background") or {}).get("color", "#ffffff")
-    img = Image.new("RGB", (width, height), bg)
+    if background_image is not None:
+        img = background_image.copy()
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        if img.size != (width, height):
+            img = img.resize((width, height), Image.LANCZOS)
+    else:
+        img = Image.new("RGB", (width, height), bg)
     draw = ImageDraw.Draw(img)
     fonts_conf = tpl.get("font") or {}
 
@@ -171,6 +192,9 @@ def render(name: str, texts: dict[str, str]) -> Image.Image:
 
         if slot.get("badge"):
             draw.rectangle([x, y, x + bw, y + bh], fill=slot["badge"])
+        elif background_image is not None:
+            # 照片底图上直接排字对比度不可控：文字区先压半透明深色蒙层
+            _scrim(img, x, y, bw, bh)
 
         slot_ctx = dict(slot)
         slot_ctx["_fonts"] = fonts_conf
@@ -203,11 +227,13 @@ def render_note_images(
     quotes: list[str],
     out_dir: str | Path,
     footer_text: str = "",
+    cover_background: Image.Image | None = None,
 ) -> list[RenderedImage]:
     """渲染一组小红书配图：1 张封面 + N 张金句图，按上传顺序编号 01_cover.png…
 
     编号全局递增（01_cover、02_quote、03_quote…）；失败时清理半成品目录再抛
-    ImagingError，保证目录里不留残缺文件。
+    ImagingError，保证目录里不留残缺文件。cover_background 只作用于封面
+    （两段式封面：cogview-4 底图 + 槽位叠字；金句图仍走纯色版式）。
     """
     out_dir = Path(out_dir)
     try:
@@ -222,7 +248,9 @@ def render_note_images(
                 plan.append(("quote", config.IMAGING_QUOTE_TEMPLATE, str(q)))
         results: list[RenderedImage] = []
         for idx, (kind, tpl_name, text) in enumerate(plan, start=1):
-            img = render(tpl_name, {"headline": text, "quote": text, **texts_common})
+            bg = cover_background if kind == "cover" else None
+            img = render(tpl_name, {"headline": text, "quote": text, **texts_common},
+                         background_image=bg)
             w, h = img.size  # 画布尺寸直接取自产物，不再二次 load_template
             filename = f"{idx:02d}_{'cover' if kind == 'cover' else 'quote'}.png"
             try:

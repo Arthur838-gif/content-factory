@@ -136,6 +136,12 @@ IMAGING_COVER_TEMPLATE = os.environ.get("CF_IMAGING_COVER_TEMPLATE", "emotion_co
 IMAGING_QUOTE_TEMPLATE = os.environ.get("CF_IMAGING_QUOTE_TEMPLATE", "quote_card")
 IMAGING_MIN_FONT_SIZE = int(os.environ.get("CF_IMAGING_MIN_FONT_SIZE", "28"))  # 超长缩字号的下限
 
+# ---- 封面底图文生图（两段式封面第一段：GLM cogview-4，第二段 PIL 叠字）----
+# 复用文案 OPENAI_API_KEY / OPENAI_BASE_URL（bigmodel）；失败一律回退纯色版式
+IMAGEGEN_ENABLED = os.environ.get("CF_IMAGEGEN_ENABLED", "true").lower() not in ("0", "false", "no")
+GLM_IMAGE_MODEL = os.environ.get("GLM_IMAGE_MODEL", "cogview-4")
+IMAGEGEN_TIMEOUT_SECONDS = int(os.environ.get("CF_IMAGEGEN_TIMEOUT_SECONDS", "120"))
+
 # ---- 敏感词表（第 6.2 节，双端词表分离）----
 SENSITIVE_FILE_WECHAT = Path(os.environ.get("CF_SENSITIVE_WECHAT", str(DATA_DIR / "sensitive_wechat.txt")))
 SENSITIVE_FILE_XHS = Path(os.environ.get("CF_SENSITIVE_XHS", str(DATA_DIR / "sensitive_xhs.txt")))

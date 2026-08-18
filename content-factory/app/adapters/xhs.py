@@ -54,17 +54,21 @@ def render_assets(
     cover_note: str,
     image_plan: list[str],
     footer_text: str = "",
+    cover_background=None,
 ) -> int:
     """M7 出图（P2）：渲染 1 张封面 + N 张金句图并登记 assets 行。
 
     在调用方的落库事务内执行（SDD 5.7：articles 与 assets 同一事务，不允许有文章
     无资产的半成品）；imaging 抛 ImagingError 时由调用方把 article 落 failed。
+    cover_background 是两段式封面的第一段产物（cogview-4 底图，PIL Image 或
+    None——生成失败/关闭开关时的回退就是纯色版式），本模块只透传不生成。
     重复渲染幂等：先清 data/assets/{article_id}/ 旧文件，再删旧 assets 行重建
     （衍生资产可重建；归档行的产物由其独立目录保留，不受影响）。
     """
     out_dir: Path = config.ASSETS_DIR / str(article_id)
     rendered = imaging.render_note_images(
-        cover_note, image_plan, out_dir, footer_text=footer_text
+        cover_note, image_plan, out_dir, footer_text=footer_text,
+        cover_background=cover_background,
     )
     session.execute(delete(Asset).where(Asset.article_id == article_id))
     for r in rendered:

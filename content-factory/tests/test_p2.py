@@ -39,7 +39,8 @@ from sqlalchemy import select  # noqa: E402
 from app.adapters import xhs as xhs_adapter  # noqa: E402
 from app.db import init_db, session_scope  # noqa: E402
 from app.models import Article, Asset, Topic  # noqa: E402
-from app.services import imaging, prompt_engine  # noqa: E402
+from app.services import imagegen, imaging, prompt_engine  # noqa: E402
+from PIL import Image  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -211,6 +212,27 @@ def main() -> int:
         check("未知版式抛 ImagingError", False)
     except imaging.ImagingError:
         check("未知版式抛 ImagingError", True)
+
+    print("\n[9] 两段式封面：背景图铺底 + 蒙层；mock 高线不联网")
+    check("LLM_MOCK 下 cover_background 返回 None（零联网）",
+          imagegen.cover_background("标题", "正文", ["AI"], 1080, 1440) is None)
+    check("LLM_MOCK 下提示词走确定性回退",
+          "标题" in imagegen.cover_prompt("标题", "正文", ["AI"]))
+    # 造一张亮色渐变当底图：渲染后封面不应再是版式纯色底，且文字区被压暗
+    grad = Image.new("RGB", (864, 1152))
+    for yy in range(1152):
+        grad.paste(tuple(int(200 + 55 * yy / 1152) for _ in range(3)), (0, yy, 864, yy + 1))
+    solid = imaging.render("emotion_cover", {"headline": "纯色对照"})
+    with_bg = imaging.render("emotion_cover", {"headline": "纯色对照"}, background_image=grad)
+    check("背景图改变封面像素（非纯色底）",
+          list(solid.getdata()) != list(with_bg.getdata()))
+    mid = with_bg.getpixel((540, 720))  # headline 槽位中心：蒙层后应比亮底暗
+    bright = grad.resize((1080, 1440)).getpixel((540, 720))
+    check("文字区蒙层压暗（对比度保障）", sum(mid) < sum(bright),
+          f"{mid} vs {bright}")
+    res3 = imaging.render_note_images("封面", ["金句"], _TMP / "notes_bg", cover_background=grad)
+    check("金句图不吃背景图（仍纯色版式）",
+          [r.filename for r in res3] == ["01_cover.png", "02_quote.png"])
 
     print("\n" + "=" * 46)
     if FAILURES:

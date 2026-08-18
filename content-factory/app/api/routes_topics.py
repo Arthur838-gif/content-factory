@@ -18,7 +18,7 @@ from ..adapters import xhs as xhs_adapter
 from ..db import session_scope
 from ..models import Article, TagLibrary, Topic
 from ..schemas import WechatArticle, XhsNote
-from ..services import generator, imaging, prompt_engine
+from ..services import generator, imagegen, imaging, prompt_engine
 from ..services.prompt_engine import PromptNotFoundError, TemplateRenderError
 
 logger = logging.getLogger(__name__)
@@ -249,6 +249,15 @@ def generate(
             meta["cover_note"] = cover
         error = result.error or "生成失败"
 
+    # 两段式封面第一段（事务外慢速 IO）：从文案归纳画面提示词 → cogview-4 底图；
+    # 失败返回 None，第二段（PIL 叠字）回退纯色版式，绝不拖 failed
+    cover_bg = None
+    if status == "ready" and platform == "xhs" and config.IMAGEGEN_ENABLED:
+        cover_bg = imagegen.cover_background(
+            title=title, content=content, tags=tags or [],
+            width=1080, height=1440,  # emotion_cover 画布（3:4 → cogview 864x1152）
+        )
+
     with session_scope() as session:
         _archive_existing(session, topic_id, platform)
         article = Article(
@@ -276,6 +285,7 @@ def generate(
                     cover_note=meta.get("cover_note") or title,
                     image_plan=meta.get("image_plan") or [],
                     footer_text=variables.get("domain") or "",
+                    cover_background=cover_bg,
                 )
             except imaging.ImagingError as exc:
                 status = "failed"
