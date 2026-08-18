@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block title %}素材采样 · 内容工厂{% endblock %}
 {% block content %}<h1>素材采样</h1>
-<p class="muted">素材引擎运维页：定时采样已关闭（RedFox 按调用计费，改为在下方按 <a href="/pillars">内容栏目</a> 的关键词池手动触发），低粉爆款样本沉淀为 <a href="/#idea-topics">灵感选题</a>；拿不到粉丝数时可人工补录。发布效果回流见 <a href="/stats">报表</a>。</p>
+<p class="muted">素材引擎运维页：{% if scheduled %}采集器按 <a href="/pillars">内容栏目</a> 的关键词池每 {{ interval_hours }} 小时定时采样，也可在下方手动触发{% else %}定时采样已关闭（RedFox 按调用计费，改为在下方按 <a href="/pillars">内容栏目</a> 的关键词池手动触发）{% endif %}，低粉爆款样本沉淀为 <a href="/#idea-topics">灵感选题</a>；拿不到粉丝数时可人工补录。发布效果回流见 <a href="/stats">报表</a>。</p>
 
 <div class="card"><h3>采集器状态</h3>
 <table><thead><tr><th>采集器</th><th>状态</th><th>连续失败</th><th>最近错误</th><th>操作</th></tr></thead><tbody>
@@ -11,7 +11,7 @@
 <p class="muted" id="collector-msg"></p></div>
 
 <div class="card"><h3>人工喂样本（降级模式入口）</h3>
-<p class="muted">自动采样拿不到粉丝数时，在此补齐笔记链接与互动数据；录入后与自动样本走同一打分、落库、撞题与建题管线。</p>
+<p class="muted">采样拿不到粉丝数时，在此补齐笔记链接与互动数据；录入后与机器采样走同一打分、落库、撞题与建题管线。</p>
 <div class="grid"><div>
   <label>笔记链接</label><input id="f-url" placeholder="https://www.xiaohongshu/explore/...">
   <label>标题</label><input id="f-title" placeholder="笔记标题">

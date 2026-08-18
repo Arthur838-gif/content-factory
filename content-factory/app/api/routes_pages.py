@@ -8,7 +8,7 @@ from sqlalchemy import desc, select
 from .. import config
 from ..collectors import base as collectors_base
 from ..db import session_scope
-from ..models import Article, Asset, Pillar, Prompt, Topic
+from ..models import Article, Asset, CollectorState, Pillar, Prompt, Topic
 from ..services import radar, scoring
 from .routes_prompts import _prompt_dict
 
@@ -81,9 +81,15 @@ def topics_page(request: Request):
                  "generated": generated, "published": published}
             )
 
-        collector = session.scalars(
-            select(CollectorState).where(CollectorState.name == "xhs_sample")
-        ).first()
+        collectors = [
+            {"name": row.name, "status": row.status, "short": label}
+            for row in session.scalars(
+                select(CollectorState).where(
+                    CollectorState.name.in_(("xhs_sample", "github_tools"))
+                )
+            ).all()
+            for label in [_WORKBENCH_LABELS.get(row.name, row.name)]
+        ]
         # P5b 周主题：分组头展示（深挖联动的主线）
         from ..models import WeekTheme
 
@@ -102,7 +108,8 @@ def topics_page(request: Request):
             "grouped": grouped,
             "idea_topics": idea_topics,
             "progress": progress,
-            "collector": collector,
+            "collectors": collectors,
+            "xhs_scheduled": config.XHS_SAMPLE_SCHEDULED,
             "themes": themes,
             "now": datetime.now(),
             "week_range": f"{week_start.strftime('%m.%d')}–{week_end.strftime('%m.%d')}",
@@ -183,10 +190,26 @@ def stats_page(request: Request, month: str | None = None):
 # 采集器标识 → 页面展示用的文字描述（/viral 页）
 COLLECTOR_LABELS = {
     "hotboard": "热榜采集（微博/知乎/百度，免费，每小时定时）",
-    "xhs_sample": "小红书采样（RedFox 计费优先、失败降级本地 mcp；已改手动触发）",
+    "xhs_sample": "小红书采样（RedFox 计费优先、失败降级本地 mcp）",
     "github_tools": "GitHub 开源项目采集（免费，只收近 90 天新锐项目）",
     "xhs_teardown": "低粉爆款周度拆解（LLM 分析库内样本，每周一 06:00）",
 }
+
+# 工作台采样引擎卡片的简短名（卡片空间小，不放长描述）
+_WORKBENCH_LABELS = {
+    "xhs_sample": "小红书采样（RedFox 优先）",
+    "github_tools": "GitHub 新锐项目采集",
+}
+
+
+def _viral_labels() -> dict:
+    """xhs_sample 的触发口径随 CF_XHS_SAMPLE_SCHEDULED 联动，避免文案与配置打架。"""
+    labels = dict(COLLECTOR_LABELS)
+    if config.XHS_SAMPLE_SCHEDULED:
+        labels["xhs_sample"] += f"（每 {config.XHS_SAMPLE_INTERVAL_HOURS} 小时定时 + 手动触发）"
+    else:
+        labels["xhs_sample"] += "（手动触发）"
+    return labels
 
 
 @router.get("/viral")
@@ -204,7 +227,9 @@ def viral_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="viral.html",
-        context={"samples": samples, "states": states, "labels": COLLECTOR_LABELS,
+        context={"samples": samples, "states": states, "labels": _viral_labels(),
+                 "scheduled": config.XHS_SAMPLE_SCHEDULED,
+                 "interval_hours": config.XHS_SAMPLE_INTERVAL_HOURS,
                  "domains": list(radar.load_domains())},
     )
 
