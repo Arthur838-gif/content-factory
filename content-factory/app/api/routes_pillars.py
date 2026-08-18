@@ -4,13 +4,15 @@
 选题台的一次性选题由 plan 按栏目节奏每周派生。
 """
 import logging
+import shutil
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from .. import config
 from ..db import session_scope
-from ..models import Article, Pillar, Topic, WeekTheme
+from ..models import Article, Asset, Pillar, Topic, WeekTheme
 from ..services import pillar as pillar_service
 
 logger = logging.getLogger(__name__)
@@ -68,10 +70,11 @@ def update_pillar(pillar_id: int, body: PillarIn) -> dict:
 
 
 @router.delete("/pillars/{pillar_id}")
-def delete_pillar(pillar_id: int) -> dict:
-    """删除栏目，连带清理它名下未生成文章的排期选题与周主题（工作台同步消失）。
+def delete_pillar(pillar_id: int, force: bool = False) -> dict:
+    """删除栏目，连带清理它名下的排期选题、周主题（工作台同步消失）。
 
-    选题已有生成文章时拒绝删除（保留内容历史，请改用停用）。
+    选题已生成文章时默认拒绝（409）；force=true 确认后连文章、
+    配图文件一并永久删除。页面二次确认后带 force 重试。
     """
     with session_scope() as session:
         row = session.get(Pillar, pillar_id)
@@ -81,26 +84,36 @@ def delete_pillar(pillar_id: int) -> dict:
             t for t in session.scalars(select(Topic).where(Topic.source == "pillar")).all()
             if (t.evidence or {}).get("pillar_id") == pillar_id
         ]
-        article_count = 0
-        for t in topics:
-            article_count += len(
-                session.scalars(select(Article.id).where(Article.topic_id == t.id)).all()
-            )
-        if article_count:
+        articles = [
+            a for t in topics
+            for a in session.scalars(select(Article).where(Article.topic_id == t.id)).all()
+        ]
+        if articles and not force:
             raise HTTPException(
                 409,
-                f"该栏目选题已有 {article_count} 篇生成文章，删除会丢失内容历史；"
-                "请改为停用（active=false）",
+                f"该栏目选题已有 {len(articles)} 篇生成文章；"
+                "如确认连文章与配图一起永久删除，请带 force=true 重试",
             )
+        for a in articles:
+            shutil.rmtree(config.ASSETS_DIR / str(a.id), ignore_errors=True)
+            for asset in session.scalars(select(Asset).where(Asset.article_id == a.id)).all():
+                session.delete(asset)
+            session.flush()  # assets 先落，再删 article（无映射关系时 flush 顺序不保证）
+            session.delete(a)
+        session.flush()
         for t in topics:
             session.delete(t)
         for theme in session.scalars(
             select(WeekTheme).where(WeekTheme.pillar_id == pillar_id)
         ).all():
             session.delete(theme)
-        session.flush()  # 先落选题/主题的删除，避免 week_themes 外键挡住栏目删除
+        session.flush()  # 再落选题/主题，避免 week_themes 外键挡住栏目删除
         session.delete(row)
-        return {"deleted": pillar_id, "topics_removed": len(topics)}
+        return {
+            "deleted": pillar_id,
+            "topics_removed": len(topics),
+            "articles_removed": len(articles),
+        }
 
 
 @router.post("/pillars/plan")

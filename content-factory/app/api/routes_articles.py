@@ -2,7 +2,6 @@
 import logging
 from datetime import datetime
 from io import BytesIO
-from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, HTTPException, Query
@@ -102,8 +101,13 @@ def download_package(article_id: int) -> StreamingResponse:
             archive.writestr("title.txt", article.title)
             archive.writestr("content.txt", article.content)
             for index, asset in enumerate(assets, start=1):
-                source = Path(config.DATA_DIR) / asset.path
-                # assets 表的 path 是受控写入的相对 data/ 路径；丢失文件不能生成残包。
+                # path 形如 "assets/{article_id}/{file}"（相对 data/）；解析时尊重
+                # ASSETS_DIR 覆盖，避免测试/部署改了目录后读到别处的文件
+                rel = asset.path
+                if rel.startswith("assets/"):
+                    rel = rel[len("assets/"):]
+                source = config.ASSETS_DIR / rel
+                # assets 表的 path 是受控写入的路径；丢失文件不能生成残包。
                 if not source.is_file():
                     raise HTTPException(status_code=409, detail=f"素材文件不存在：{asset.path}")
                 suffix = source.suffix or ".png"

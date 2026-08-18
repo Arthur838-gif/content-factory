@@ -69,8 +69,13 @@ async function togglePillar(id, active, btn) {
   if (r.ok) location.reload(); else alert((await r.json()).detail || '操作失败');
 }
 async function delPillar(id, btn) {
-  if (!confirm('确认删除该栏目？其名下未生成文章的排期选题和周主题会一并删除（工作台同步清理）；已生成过文章的栏目无法删除，只能停用。')) return;
-  const r = await fetch(`/api/pillars/${id}`, {method: 'DELETE'});
+  if (!confirm('确认删除该栏目？其名下排期选题和周主题会一并删除（工作台同步清理）。')) return;
+  let r = await fetch(`/api/pillars/${id}`, {method: 'DELETE'});
+  if (r.status === 409) {
+    const d = await r.json();
+    if (!confirm((d.detail || '该栏目已有生成文章。') + '\n\n确定要连文章和配图一起永久删除吗？此操作不可恢复。')) return;
+    r = await fetch(`/api/pillars/${id}?force=true`, {method: 'DELETE'});
+  }
   if (r.ok) location.reload(); else alert((await r.json()).detail || '删除失败');
 }
 async function planWeek(btn) {
