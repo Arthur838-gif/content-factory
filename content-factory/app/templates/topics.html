@@ -12,7 +12,7 @@
 {% if collector %}
 <div class="card stat"><strong>采样引擎</strong><span class="muted">xhs_sample</span>
 {% if collector.status == 'open' %}<div><span class="badge failed">熔断</span></div><span class="muted">需到 <a href="/viral">素材采样</a> 解除</span>
-{% else %}<div><span class="badge ready">正常</span></div><span class="muted">每 {{ 6 }} 小时自动采样</span>{% endif %}</div>
+{% else %}<div><span class="badge ready">正常</span></div><span class="muted">小红书采样 · 手动触发（<a href="/viral">素材采样</a>）</span>{% endif %}</div>
 {% endif %}
 <div class="card stat"><strong>灵感池</strong><span class="muted">一次性选题</span><div class="big">{{ idea_topics|length }}</div><span class="muted"><a href="/viral">爆款样本</a> 持续供给</span></div>
 </div>
