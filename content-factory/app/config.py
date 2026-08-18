@@ -83,8 +83,11 @@ XHS_SAMPLE_KEYWORDS = [k.strip() for k in os.environ.get("CF_XHS_SAMPLE_KEYWORDS
 XHS_SAMPLE_MAX_QUERIES = int(os.environ.get("CF_XHS_SAMPLE_MAX_QUERIES", "20"))
 XHS_SAMPLE_INTERVAL_HOURS = int(os.environ.get("CF_XHS_SAMPLE_INTERVAL_HOURS", "6"))
 # GitHub 开源项目采集（P7：合集栏目的真实工具素材；未鉴权 10 次/分钟）
-GITHUB_MIN_STARS = int(os.environ.get("CF_GITHUB_MIN_STARS", "1000"))
-GITHUB_DAYS_PUSHED = int(os.environ.get("CF_GITHUB_DAYS_PUSHED", "180"))
+# 时效优先：只收"最近新建却已攒星"的新锐项目（sort=stars 在 created 窗口内
+# 即涨星最快），避免 AutoGPT 这类老牌项目长期霸榜
+GITHUB_MIN_STARS = int(os.environ.get("CF_GITHUB_MIN_STARS", "200"))
+GITHUB_DAYS_CREATED = int(os.environ.get("CF_GITHUB_DAYS_CREATED", "90"))
+GITHUB_DAYS_PUSHED = int(os.environ.get("CF_GITHUB_DAYS_PUSHED", "30"))
 GITHUB_PER_QUERY = int(os.environ.get("CF_GITHUB_PER_QUERY", "10"))
 GITHUB_MAX_QUERIES = int(os.environ.get("CF_GITHUB_MAX_QUERIES", "5"))
 GITHUB_TIMEOUT_SECONDS = int(os.environ.get("CF_GITHUB_TIMEOUT", "30"))

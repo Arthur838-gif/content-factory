@@ -7,8 +7,11 @@
 数据与纪律：
 - 只读公开 search API（api.github.com/search/repositories），无鉴权
   （限额 10 次/分钟，按栏目关键词量级足够；不调任何写接口）；
+- 时效优先：限定"最近 GITHUB_DAYS_CREATED 天内创建"再按 star 倒序——
+  新建却能快速攒星的项目才是真新锐；不按全历史 star 排（老牌项目霸榜）；
 - 条目映射：likes=star 数、collects=fork 数；raw.keyword 记栏目中文关键词
-  （与 xhs_sample 同约定，pillar 排期靠它命中）；
+  （与 xhs_sample 同约定，pillar 排期靠它命中），raw.created_at/pushed_at
+  供生成时写出"上周刚开源"这类时效语境；
 - 标题带上中文关键词（"{关键词}开源项目｜owner/repo：简介"），
   一是为了领域词表能命中入库，二是给主题规划/生成提供可读上下文。
 """
@@ -64,6 +67,8 @@ def to_hot_items(repos: list, zh_kw: str) -> list[HotItem]:
                     "description": desc,
                     "topics": r.get("topics") or [],
                     "language": r.get("language"),
+                    "created_at": r.get("created_at"),
+                    "pushed_at": r.get("pushed_at"),
                 },
             )
         )
@@ -84,12 +89,14 @@ class GithubToolsCollector(BaseCollector):
         return items
 
     def _search(self, query: str) -> list:
-        since = (date.today() - timedelta(days=config.GITHUB_DAYS_PUSHED)).isoformat()
+        created_since = (date.today() - timedelta(days=config.GITHUB_DAYS_CREATED)).isoformat()
+        pushed_since = (date.today() - timedelta(days=config.GITHUB_DAYS_PUSHED)).isoformat()
         with httpx.Client(timeout=config.GITHUB_TIMEOUT_SECONDS) as client:
             resp = client.get(
                 _API,
                 params={
-                    "q": f"{query} stars:>{config.GITHUB_MIN_STARS} pushed:>{since}",
+                    "q": (f"{query} stars:>{config.GITHUB_MIN_STARS}"
+                          f" created:>{created_since} pushed:>{pushed_since}"),
                     "sort": "stars",
                     "order": "desc",
                     "per_page": config.GITHUB_PER_QUERY,

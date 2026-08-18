@@ -55,7 +55,8 @@ _REPOS = [
     {"full_name": "owner/hot-tool", "description": "Convert anything to markdown",
      "stargazers_count": 5000, "forks_count": 300, "open_issues_count": 12,
      "html_url": "https://github.com/owner/hot-tool", "topics": ["ai"], "language": "Python",
-     "owner": {"login": "owner"}},
+     "owner": {"login": "owner"},
+     "created_at": "2026-08-01T00:00:00Z", "pushed_at": "2026-08-17T00:00:00Z"},
     {"full_name": "owner/mid-tool", "description": "Batch image editing",
      "stargazers_count": 2000, "forks_count": 120, "open_issues_count": 5,
      "html_url": "https://github.com/owner/mid-tool", "topics": ["ai"], "language": "TypeScript",
@@ -84,6 +85,24 @@ def main() -> int:
     check("likes=star、collects=fork、raw.keyword=栏目词",
           it.likes == 5000 and it.collects == 300 and it.raw["keyword"] == "AI工具"
           and it.raw["stars"] == 5000 and it.source == "github")
+    check("raw 带 created_at/pushed_at（时效语境）",
+          it.raw["created_at"] == "2026-08-01T00:00:00Z"
+          and it.raw["pushed_at"] == "2026-08-17T00:00:00Z")
+
+    print("\n[1b] 查询构造：时效优先（新锐项目，不收老牌霸榜）")
+    c = GithubToolsCollector()
+    from unittest.mock import patch
+    captured: dict = {}
+    with patch.object(github_tools.httpx, "Client") as MockClient:
+        MockClient.return_value.__enter__.return_value.get.return_value.status_code = 200
+        MockClient.return_value.__enter__.return_value.get.return_value.raise_for_status = lambda: None
+        MockClient.return_value.__enter__.return_value.get.return_value.json.return_value = {"items": _REPOS}
+        c._search("AI tools")
+        captured = MockClient.return_value.__enter__.return_value.get.call_args.kwargs["params"]
+    q = captured["q"]
+    check("查询含 created:> 与 stars:>", "created:>" in q and f"stars:>{config.GITHUB_MIN_STARS}" in q, q)
+    check("查询含 pushed:> 且按 star 倒序", "pushed:>" in q
+          and captured["sort"] == "stars" and captured["order"] == "desc", q)
 
     print("\n[2] 入库：github 只落 hot_items 不建灵感选题")
     with session_scope() as s:
