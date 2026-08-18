@@ -9,6 +9,7 @@
 <td>{% for kw in (p.keywords or []) %}<span class="badge">{{ kw }}</span> {% endfor %}</td>
 <td><span class="badge {{ 'ready' if p.active else 'archived' }}">{{ '启用' if p.active else '停用' }}</span></td>
 <td><div class="actions">
+<button class="secondary" onclick="renamePillar({{ p.id }}, this)">改名</button>
 <button class="secondary" onclick="togglePillar({{ p.id }}, {{ 'false' if p.active else 'true' }}, this)">{{ '停用' if p.active else '启用' }}</button>
 {% if not planned.get(p.id) %}<button class="secondary" onclick="delPillar({{ p.id }}, this)">删除</button>{% endif %}
 </div></td></tr>
@@ -49,6 +50,16 @@ document.getElementById('pillar-form').addEventListener('submit', async e => {
   const r = await fetch('/api/pillars', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(_payload())});
   if (r.ok) location.reload(); else alert((await r.json()).detail || '创建失败');
 });
+async function renamePillar(id, btn) {
+  const list = await (await fetch('/api/pillars')).json();
+  const p = list.find(x => x.id === id);
+  if (!p) return;
+  const name = prompt('修改栏目名称（新名称用于之后的排期与主题；已生成的选题、文章标题不受影响）：', p.name);
+  if (name === null || name.trim() === p.name) return;
+  const r = await fetch(`/api/pillars/${id}`, {method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({...p, name: name.trim()})});
+  if (r.ok) location.reload(); else alert((await r.json()).detail || '改名失败');
+}
 async function togglePillar(id, active, btn) {
   const list = await (await fetch('/api/pillars')).json();
   const p = list.find(x => x.id === id);
