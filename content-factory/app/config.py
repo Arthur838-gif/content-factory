@@ -50,6 +50,16 @@ TOPIC_JACCARD_THRESHOLD = float(os.environ.get("CF_TOPIC_DUPLICATE_JACCARD", "0.
 TOPIC_DEDUP_WINDOW_DAYS = 7  # 撞题回看窗口
 TOPIC_TTL_HOURS = 72  # radar 选题保鲜：created_at + 72h
 
+# ---- topics.score 评分公式（P4 数据飞轮；公式与拍板记录见 docs/p4-calibration.md）----
+# score = base_score + SCORE_EFFECT_SCALE × log1p(Σ(likes×W_L + collects×W_C + comments×W_M))
+# 求和范围 = 该 topic 全部已发布文章的 publish_records.metrics；权重与 viral_score 同构。
+SCORE_W_LIKES = float(os.environ.get("CF_SCORE_W_LIKES", "1"))
+SCORE_W_COLLECTS = float(os.environ.get("CF_SCORE_W_COLLECTS", "2"))
+SCORE_W_COMMENTS = float(os.environ.get("CF_SCORE_W_COMMENTS", "3"))
+SCORE_EFFECT_SCALE = float(os.environ.get("CF_SCORE_EFFECT_SCALE", "1.0"))  # 效果分整体缩放
+# 模板效果分样本量门槛：published < 该值只展示、不给出任何启停建议
+PROMPT_STATS_MIN_SAMPLES = int(os.environ.get("CF_PROMPT_STATS_MIN_SAMPLES", "10"))
+
 # ---- 数据保留与备份（第 5 章 / 第 10 章协作纪律）----
 HOT_ITEMS_RETENTION_DAYS = 90  # hot_items 只保留 90 天，周清理任务物理删除
 BACKUP_KEEP = 7  # 每日备份保留最近 7 份
@@ -84,7 +94,9 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-chat")
 LLM_MAX_TOKENS = int(os.environ.get("CF_LLM_MAX_TOKENS", "4096"))
 LLM_TIMEOUT_SECONDS = int(os.environ.get("CF_LLM_TIMEOUT_SECONDS", "60"))
 LLM_MAX_RETRIES = 2  # 重试封顶 2 次（1 次首发 + 2 次重试 = 最多 3 轮）
-# DeepSeek 单价（美元 / 每百万 token），用于 meta.usage.cost_est 估算；换供应商时改这里
+# 单价（美元 / 每百万 token），用于 meta.usage.cost_est 估算；换供应商时改这里。
+# ⚠️ P4 成本报表口径：当前默认为 DeepSeek 单价，切 GLM 后必须用
+# CF_LLM_PRICE_INPUT / CF_LLM_PRICE_OUTPUT 按官方价修正，否则报表只能作"估算口径"。
 LLM_PRICE_INPUT_PER_M = float(os.environ.get("CF_LLM_PRICE_INPUT", "0.30"))
 LLM_PRICE_OUTPUT_PER_M = float(os.environ.get("CF_LLM_PRICE_OUTPUT", "0.50"))
 

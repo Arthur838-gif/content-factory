@@ -25,6 +25,28 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["topics"])
 
+
+@router.get("/topics")
+def list_topics() -> list[dict]:
+    """选题列表，按 score 倒序（P4：回填驱动的评分即时体现在排序上）。"""
+    with session_scope() as session:
+        topics = session.scalars(select(Topic).order_by(desc(Topic.score), desc(Topic.id))).all()
+        return [
+            {
+                "id": t.id,
+                "title": t.title,
+                "angle": t.angle,
+                "domain": t.domain,
+                "source": t.source,
+                "status": t.status,
+                "score": t.score,
+                "evidence": t.evidence,
+                "expires_at": t.expires_at,
+                "created_at": t.created_at,
+            }
+            for t in topics
+        ]
+
 # 支持的平台与各自的输出 Schema（wechat P0，xhs P1）
 PLATFORM_SCHEMAS: dict[str, type] = {
     "wechat": WechatArticle,
@@ -146,6 +168,7 @@ def generate(
         except TemplateRenderError as exc:
             raise HTTPException(status_code=500, detail=f"模板渲染失败：{exc}") from exc
         prompt_id_resolved = prompt.id
+        prompt_version_resolved = prompt.version
         # 拷贝出纯文本，避免 ORM 对象跨 session
         system_msg, user_msg = system_msg, user_msg
 
@@ -165,6 +188,9 @@ def generate(
             content = art.content_md
             tags = None
             meta = {"digest": art.digest}
+        # P4：模板效果分归因凭据（不改表；列上已有 prompt_id，meta 再存版本快照防模板行变动）
+        meta["prompt_id"] = prompt_id_resolved
+        meta["prompt_version"] = prompt_version_resolved
         meta["usage"] = result.usage
         error = None
     else:
@@ -173,7 +199,11 @@ def generate(
         title = getattr(art, "title", "") if art else ""
         content = (getattr(art, "content_md", "") or getattr(art, "content", "")) if art else ""
         tags = list(art.tags) if art and getattr(art, "tags", None) else None
-        meta = {"usage": result.usage}
+        meta = {
+            "prompt_id": prompt_id_resolved,
+            "prompt_version": prompt_version_resolved,
+            "usage": result.usage,
+        }
         digest = getattr(art, "digest", "") if art else ""
         if digest:
             meta["digest"] = digest

@@ -1,0 +1,39 @@
+{% extends "base.html" %}{% block title %}报表 · 内容工厂{% endblock %}
+{% block content %}<h1>数据飞轮报表</h1>
+
+<div class="card">
+  <h2>成本统计（{{ cost.month }}）</h2>
+  <p class="muted">{{ cost.price.basis }}（单价：输入 ${{ cost.price.input_per_m }}/M · 输出 ${{ cost.price.output_per_m }}/M，环境变量 CF_LLM_PRICE_INPUT / CF_LLM_PRICE_OUTPUT 修正）</p>
+  <p>一篇小红书笔记平均生成成本：<strong style="font-size:26px">${{ cost.xhs_avg_cost_per_article if cost.xhs_avg_cost_per_article is not none else '—（本月无 xhs 生成记录）' }}</strong></p>
+  {% if cost.platforms %}<table><thead><tr><th>平台</th><th>文章数</th><th>prompt tokens</th><th>completion tokens</th><th>cost_est 合计</th><th>平均单篇</th></tr></thead><tbody>
+  {% for name, p in cost.platforms.items() %}<tr><td>{{ name }}</td><td>{{ p.articles }}</td><td>{{ p.prompt_tokens }}</td><td>{{ p.completion_tokens }}</td><td>${{ '%.6f'|format(p.cost_est) }}</td><td>${{ '%.6f'|format(p.avg_cost_est) }}</td></tr>{% endfor %}
+  <tr><td><strong>合计</strong></td><td>{{ cost.total.articles }}</td><td>{{ cost.total.prompt_tokens }}</td><td>{{ cost.total.completion_tokens }}</td><td><strong>${{ '%.6f'|format(cost.total.cost_est) }}</strong></td><td></td></tr>
+  </tbody></table>{% else %}<p class="muted">本月暂无带 usage 记账的文章。</p>{% endif %}
+  {% if cost.history %}<h3>历史月份</h3><table><thead><tr><th>月份</th><th>文章数</th><th>tokens（输入/输出）</th><th>cost_est</th></tr></thead><tbody>
+  {% for h in cost.history %}<tr><td><a href="/stats?month={{ h.month }}">{{ h.month }}</a></td><td>{{ h.articles }}</td><td>{{ h.prompt_tokens }} / {{ h.completion_tokens }}</td><td>${{ '%.6f'|format(h.cost_est) }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</div>
+
+<div class="card">
+  <h2>模板效果分（派生报表，按版本聚合已发布文章）</h2>
+  {% if prompt_stats %}<table><thead><tr><th>平台 / 场景</th><th>版本</th><th>已发布篇数</th><th>平均点赞</th><th>平均收藏</th><th>平均评论</th><th>结论</th></tr></thead><tbody>
+  {% for s in prompt_stats %}<tr><td>{{ s.platform }} · {{ s.scenario }}</td><td>{{ s.version }}</td><td>{{ s.published_count }}</td><td>{{ s.avg_likes }}</td><td>{{ s.avg_collects }}</td><td>{{ s.avg_comments }}</td><td>{% if s.sufficient_samples %}样本充足，仅供参考{% else %}<span class="badge failed">样本不足</span>{% endif %}</td></tr>{% endfor %}
+  </tbody></table><p class="muted">published &lt; 10 篇时不做任何自动启停建议，只展示；系统不会自动启停模板。</p>
+  {% else %}<p class="muted">暂无已发布文章。</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>阈值校准（viral_samples 判定 × 实际发布效果）</h2>
+  <p>当前阈值：fans ≤ <strong>{{ calibration.thresholds.viral_fans_max }}</strong> ·
+     预筛 likes ≥ <strong>{{ calibration.thresholds.viral_likes_min }}</strong> ·
+     爆文率 ≥ <strong>{{ calibration.thresholds.viral_score_min }}</strong> ·
+     撞题 Jaccard ≥ <strong>{{ calibration.thresholds.topic_duplicate_jaccard }}</strong></p>
+  <p class="notice">修改方式：环境变量（CF_VIRAL_FANS_MAX / CF_VIRAL_LIKES_MIN / CF_VIRAL_SCORE_MIN / CF_TOPIC_DUPLICATE_JACCARD），由周四校准会人工拍板后生效并记录到 docs/p4-calibration.md；本页面不提供改阈值功能。</p>
+  <p class="muted">样本 {{ calibration.summary.sample_count }} 条 · 当前阈值下可复判通过 {{ calibration.summary.would_pass_now }} 条 ·
+     有发布对照 {{ calibration.summary.published_sample_count }} 条 ·
+     爆文率区间 {{ calibration.summary.viral_score_min }} ~ {{ calibration.summary.viral_score_max }}</p>
+  {% if calibration.samples %}<table><thead><tr><th>样本</th><th>领域</th><th>fans</th><th>likes / collects / comments</th><th>爆文率</th><th>当前阈值复判</th><th>自有账号发布效果</th></tr></thead><tbody>
+  {% for s in calibration.samples %}<tr><td><strong>{{ s.title[:40] }}</strong></td><td>{{ s.domain }}</td><td>{{ s.fans }}</td><td>{{ s.likes }} / {{ s.collects }} / {{ s.comments }}</td><td>{{ s.viral_score }}</td><td>{% if s.would_pass_now %}<span class="badge ready">通过</span>{% else %}<span class="badge failed">不通过</span>{% endif %}</td><td>{% if s.published_effect %}互动合计 {{ s.published_effect.engagement }}（topic #{{ s.published_effect.topic_id }}，score {{ s.published_effect.score }}）{% else %}<span class="muted">未发布</span>{% endif %}</td></tr>{% endfor %}
+  </tbody></table>{% else %}<p class="muted">暂无 viral_samples，等 P-1b 采样或人工喂样本。</p>{% endif %}
+</div>
+{% endblock %}

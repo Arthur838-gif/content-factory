@@ -1,9 +1,52 @@
 # content-factory · 双端内容工厂
 
 公众号 + 小红书双端矩阵内容系统。上游事实来源：《双端内容工厂 · 开发计划书 v1.3》。
-本仓库当前进度：**P-1b 低粉爆款引擎**（M2 小红书采样器 + M3 选题雷达分析；P0-P3 文本/出图/素材包链路已就绪）。
+本仓库当前进度：**P4 数据飞轮**（发布回填 → 评分 → 报表的闭环；P0-P3 文本/出图/素材包链路、P-1b 低粉爆款引擎均已就绪）。
 
 > P-1a 已完成：8 表建表、采集/调度/备份/告警/雷达分析就位，`topics` 表有 radar 选题可供生成测试。
+
+## P4 数据飞轮
+
+发布 → 回填 → 评分 → 反哺的闭环（回填永远由人工发起，无任何自动抓取）：
+
+- **评分重算 `app/services/scoring.py`**：`POST /api/articles/{id}/publish` 回填成功后自动触发
+  `recompute()`，也可手动全量重算。公式（拍板记录见 `docs/p4-calibration.md`）：
+  `score = base_score + SCALE × log1p(Σ(likes×1 + collects×2 + comments×3))`，
+  求和范围为该 topic 全部已发布文章的回填数据；幂等重算，补录后重跑即更新；
+  无回填选题评分不变（不拉低未发布选题）。权重与缩放走环境变量
+  `CF_SCORE_W_LIKES / CF_SCORE_W_COLLECTS / CF_SCORE_W_COMMENTS / CF_SCORE_EFFECT_SCALE`。
+  `GET /api/topics` 与选题台 `/` 均按 score 倒序。
+- **模板效果分**（派生报表，不落字段、不自动启停模板）：`GET /api/prompts/stats` 按
+  platform+scenario+version 聚合已发布文章的互动均值（每篇多条回填先合并再平均）；
+  生成落库时在 `articles.meta` 记录 `prompt_id / prompt_version`（不改表），
+  无版本记录的历史文章归"未知版本"组；published < 10 篇（`CF_PROMPT_STATS_MIN_SAMPLES`）
+  只展示并标"样本不足"。
+- **成本报表**：`GET /api/stats/cost?month=YYYY-MM` 双端 tokens / 文章数 / cost_est 合计，
+  直接给出 `xhs_avg_cost_per_article`（回答"一篇小红书笔记平均生成成本是多少"）；
+  `GET /api/stats/cost/article/{id}` 单篇明细。口径为 **cost_est 估算值**——切 GLM 后必须用
+  `CF_LLM_PRICE_INPUT / CF_LLM_PRICE_OUTPUT` 按官方价修正，否则不作账单依据。
+- **阈值校准视图**：`GET /api/stats/threshold-calibration` 展示 viral_samples 判定 ×
+  自有账号实际发布效果交叉表 + 当前阈值；校准结论由周四校准会人工拍板 → 改环境变量 →
+  记录到 `docs/p4-calibration.md`（radar 现读 config，改值即生效；系统不自动改阈值）。
+- **报表页 `/stats`**：成本（大字 xhs 平均单篇成本 + 历史月份小表）、模板效果、阈值校准三区；
+  页面只读，不提供改阈值入口（防止绕过校准会纪律）。
+
+### P4 验收脚本
+
+```bash
+.venv/Scripts/python tests/test_p4.py
+```
+
+覆盖结构验收 1-7：回填触发评分（publish_records 只增不改、排序反映回填效果、无回填选题
+分数不变）、重算幂等与补录更新、模板效果分聚合与"未知版本"组、成本报表与 xhs 平均单篇
+成本手工抽算一致、阈值校准交叉表与热改阈值即刻生效、报表页三区、meta 记录 prompt 版本。
+
+### P4 真实质量验收缺口（顺延）
+
+- P-1b 真实采样未完成（fans 探针降级中，见 `docs/p-1b-fans-probe.md`），阈值校准结论暂为
+  "样本不足，维持初值"（已记录 `docs/p4-calibration.md`）。
+- 真实发布回填 0 篇：待首篇小红书笔记人工发布并回填后，验证选题台排序变化与成本报表
+  与 `meta.usage` 手工抽算一致；周四校准会用真实对照数据完成一次三阈值评审。
 
 ## P-1b 低粉爆款引擎
 
@@ -199,6 +242,11 @@ P2 交付 `services/imaging.py`（共享图文服务）、`adapters/xhs.py` 的 
 `services/radar.py` 低粉爆款打分与周度拆解、`api/routes_viral_samples.py`（样本列表 +
 人工喂样本）、`templates/viral.html`（`/viral` 管理页）、`prompts/xhs_teardown.yml`（A3 种子）、
 `docs/p-1b-fans-probe.md`（探针记录）、`tests/test_p1b.py`。
+P4 交付 `services/scoring.py`（评分重算 + 模板效果分 + 成本/校准报表）、
+`api/routes_stats.py`（cost / prompts/stats / threshold-calibration）、
+`api/routes_topics.py` 的 `GET /api/topics`、publish 回填后自动重算、
+`templates/stats.html`（`/stats` 报表页）、`docs/p4-calibration.md`（公式拍板与校准记录）、
+`tests/test_p4.py`。
 其余模块（M6 草稿箱等）按路线图在后续阶段交付。
 
 ## 定时任务（APScheduler）

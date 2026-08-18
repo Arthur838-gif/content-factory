@@ -15,6 +15,7 @@ from .api import (
     routes_articles,
     routes_pages,
     routes_prompts,
+    routes_stats,
     routes_topics,
     routes_viral_samples,
 )
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_topics.router)
     app.include_router(routes_articles.router)
     app.include_router(routes_prompts.router)
+    app.include_router(routes_stats.router)
     app.include_router(routes_viral_samples.router)
     app.include_router(routes_pages.router)
 

@@ -1,4 +1,4 @@
-"""Jinja 管理页面（P3 / M8；P-1b 加低粉爆款页）。"""
+"""Jinja 管理页面（P3 / M8；P-1b 加低粉爆款页，P4 加报表页）。"""
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, select
@@ -7,7 +7,7 @@ from .. import config
 from ..collectors import base as collectors_base
 from ..db import session_scope
 from ..models import Article, Asset, HotItem, Prompt, Topic, ViralSample
-from ..services import radar
+from ..services import radar, scoring
 
 router = APIRouter(tags=["pages"])
 templates = Jinja2Templates(directory=str(config.PROJECT_ROOT / "app" / "templates"))
@@ -41,6 +41,21 @@ def article_page(request: Request, article_id: int):
             raise HTTPException(status_code=404, detail=f"article {article_id} 不存在")
         view = _article_view(session, article)
     return templates.TemplateResponse(request=request, name="article.html", context=view)
+
+
+@router.get("/stats")
+def stats_page(request: Request, month: str | None = None):
+    """P4 报表页：成本统计、模板效果、阈值校准三区（只读，不提供改阈值入口）。"""
+    if month is not None and (len(month) != 7 or month[4] != "-"):
+        raise HTTPException(status_code=422, detail="month 格式应为 YYYY-MM")
+    cost = scoring.cost_report(month)
+    prompt_stats = scoring.prompt_stats()
+    calibration = scoring.calibration_view()
+    return templates.TemplateResponse(
+        request=request,
+        name="stats.html",
+        context={"cost": cost, "prompt_stats": prompt_stats, "calibration": calibration},
+    )
 
 
 @router.get("/viral")

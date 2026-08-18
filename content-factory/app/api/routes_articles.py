@@ -1,4 +1,5 @@
-"""文章读取、素材包下载与发布回填接口（P3 / M8）。"""
+"""文章读取、素材包下载与发布回填接口（P3 / M8；P4 回填后触发评分重算）。"""
+import logging
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +13,9 @@ from sqlalchemy import select
 from .. import config
 from ..db import session_scope
 from ..models import Article, Asset, PublishRecord, Topic
+from ..services import scoring
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["articles"])
 
@@ -117,7 +121,11 @@ class PublishRequest(BaseModel):
 
 @router.post("/articles/{article_id}/publish", status_code=201)
 def publish_article(article_id: int, payload: PublishRequest) -> dict:
-    """追加一条发布回填记录，并把文章置为 published 终态。"""
+    """追加一条发布回填记录，并把文章置为 published 终态。
+
+    P4 副作用：回填事务提交后触发 scoring.recompute()，让回填数据即时反哺
+    topics.score 与排序。重算失败不影响已提交的回填（只记日志），可手动重算补齐。
+    """
     with session_scope() as session:
         article = session.get(Article, article_id)
         if article is None:
@@ -132,7 +140,7 @@ def publish_article(article_id: int, payload: PublishRequest) -> dict:
         session.add(record)
         article.status = "published"
         session.flush()
-        return {
+        result = {
             "id": record.id,
             "article_id": record.article_id,
             "platform": record.platform,
@@ -142,3 +150,11 @@ def publish_article(article_id: int, payload: PublishRequest) -> dict:
             "published_at": record.published_at or datetime.now(),
             "status": article.status,
         }
+
+    try:
+        result["scoring"] = scoring.recompute()
+    except Exception:
+        # 回填已提交，评分重算是纯确定性计算，失败可随时手动补跑
+        logger.exception("publish 后 topics.score 重算失败（article=%s）", article_id)
+        result["scoring"] = {"error": "重算失败，请手动触发 recompute"}
+    return result

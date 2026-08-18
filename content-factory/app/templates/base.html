@@ -16,7 +16,7 @@
     .field-title { display:flex; justify-content:space-between; align-items:center; } .notice { padding:10px; border-radius:7px; background:#fef3c7; color:#92400e; } @media(max-width:760px){.grid{grid-template-columns:1fr} table{display:block;overflow:auto}}
   </style>
 </head>
-<body><header><strong>内容工厂</strong><nav><a href="/">选题台</a><a href="/viral">低粉爆款</a><a href="/prompts">模板管理</a></nav></header><main>{% block content %}{% endblock %}</main>
+<body><header><strong>内容工厂</strong><nav><a href="/">选题台</a><a href="/viral">低粉爆款</a><a href="/prompts">模板管理</a><a href="/stats">报表</a></nav></header><main>{% block content %}{% endblock %}</main>
 <script>
 async function copyText(id) { const text=document.getElementById(id).innerText; await navigator.clipboard.writeText(text); }
 async function generate(topicId, platform) { const r=await fetch(`/api/topics/${topicId}/generate?platform=${platform}`,{method:'POST'}); const d=await r.json(); if(r.ok && d.article_id) location.href=`/articles/${d.article_id}`; else alert(d.detail || d.error || '生成失败'); }
