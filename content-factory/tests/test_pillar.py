@@ -14,6 +14,7 @@
   9. P5b 生成系列上下文（主题/期数/其他期/合集枢纽）+ 选题归档
  10. P5b 合集素材不足拦截（防模型虚构内容）
  11. P5b 按主题重排：归档未按主题的旧选题并按主题重新分期
+ 12. P5b 归档选题不占档位：全部归档后排期重新建满
 
 运行：.venv/Scripts/python tests/test_pillar.py
 """
@@ -288,6 +289,17 @@ def main() -> int:
     page_r = client.get("/pillars")
     check("重排后 /pillars 计划数不含归档（2 期）",
           page_r.status_code == 200 and "按主题重排（归档本周旧选题）" in page_r.text)
+
+    print("\n[13] P5b 归档选题不占档位：全部归档后排期重新建满")
+    with session_scope() as session:
+        rids = [t.id for t in session.scalars(select(Topic).where(Topic.source == "pillar")).all()
+                if (t.evidence or {}).get("pillar_id") == pid_r]
+    for tid in rids:
+        assert client.put(f"/api/topics/{tid}/archive").status_code == 200
+    plan10 = client.post(f"/api/pillars/plan?pillar_id={pid_r}").json()
+    d10 = plan10[0]
+    check("归档后 plan 不被归档选题挡住，按主题重建 2 期",
+          len(d10["created"]) == 2 and not d10.get("warning"), str(d10))
 
     print()
     if FAILURES:

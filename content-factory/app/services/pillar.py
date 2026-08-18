@@ -75,7 +75,8 @@ def _week_pillar_topics(session, week_start: datetime) -> list[Topic]:
     rows = session.scalars(
         select(Topic).where(Topic.source == "pillar", Topic.created_at >= week_start)
     ).all()
-    return list(rows)
+    # 归档选题不占档位：排期补缺口、系列上下文、页面统计都以此为口径
+    return [t for t in rows if t.status != "archived"]
 
 
 def _snapshot(item: HotItem, keyword: str) -> dict:
