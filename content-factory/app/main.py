@@ -70,7 +70,12 @@ def create_app() -> FastAPI:
             origin_host = (urlparse(origin).hostname or "").lower()
             if origin_host and origin_host not in allowed_hosts:
                 return JSONResponse({"detail": "forbidden origin"}, status_code=403)
-        return await call_next(request)
+        response = await call_next(request)
+        # 页面是实时状态（最新生成/排期/主题），浏览器 HTTP 缓存或后退缓存
+        # 展示旧页会让人误以为没生效——HTML 一律 no-store 强制回源
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     app.include_router(routes_admin.router)
     app.include_router(routes_topics.router)

@@ -224,6 +224,13 @@ def main() -> int:
     except ValueError as exc:
         check("空串报错并带原文开头", "不是合法 JSON" in str(exc) and "原文开头" in str(exc), str(exc)[:80])
 
+    print("\n[10] 页面不缓存（生成后返回工作台信息实时）")
+    home10 = client.get("/")
+    check("HTML 带 Cache-Control: no-store",
+          home10.headers.get("cache-control") == "no-store",
+          str(home10.headers.get("cache-control")))
+    check("页面带 bfcache 自动刷新脚本", "e.persisted" in home10.text)
+
     print("\n" + "=" * 46)
     if FAILURES:
         print(f"FAIL：{len(FAILURES)} 项未通过 -> {FAILURES}")

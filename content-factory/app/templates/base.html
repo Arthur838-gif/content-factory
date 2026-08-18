@@ -19,7 +19,9 @@
   </style>
 </head>
 <body><header><strong>内容工厂</strong><nav><a href="/">工作台</a><a href="/pillars">内容栏目</a><a href="/viral">素材采样</a><a href="/prompts">模板管理</a><a href="/stats">报表</a></nav></header><main>{% block content %}{% endblock %}</main>
-<script>document.querySelectorAll('nav a').forEach(a => { if (a.getAttribute('href') === location.pathname) a.classList.add('active'); });</script>
+<script>document.querySelectorAll('nav a').forEach(a => { if (a.getAttribute('href') === location.pathname) a.classList.add('active'); });
+// 后退缓存（bfcache）恢复的是旧 DOM：从文章页返回工作台时强制刷新拿最新状态
+window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });</script>
 <script>
 async function copyText(id) { const text=document.getElementById(id).innerText; await navigator.clipboard.writeText(text); }
 const _PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书' };
