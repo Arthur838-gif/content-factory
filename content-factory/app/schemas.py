@@ -2,7 +2,7 @@
 import hashlib
 from datetime import datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class HotItem(BaseModel):
@@ -42,6 +42,7 @@ class CollectorRunResult(BaseModel):
     inserted: int  # 本次入库条数
     topics_created: int
     topics_merged: int
+    viral_created: int = 0  # 本次判定为低粉爆款并落 viral_samples 的条数（P-1b）
 
 
 class WechatArticle(BaseModel):
@@ -66,3 +67,55 @@ class XhsNote(BaseModel):
     tags: list[str] = Field(..., description="3-5 个相关标签，不带 # 号")
     cover_text: str = Field(..., description="封面主标题文案，≤ 12 字，有冲击力")
     image_quotes: list[str] = Field(..., description="2-4 句金句，每句 ≤ 20 字，可直接印在图上")
+
+
+class ManualSampleInput(BaseModel):
+    """POST /api/viral-samples/manual 人工喂样本（P-1b 降级模式入口）。
+
+    fans 必须显式填写（自动采样拿不到 fans 时，低粉爆款只能经此入口补齐）；
+    录入后与自动样本走完全相同的打分、落库、撞题与建题管线。
+    """
+
+    url: str = Field(..., description="笔记链接，http(s) 开头")
+    title: str = Field(..., min_length=1, description="笔记标题")
+    author: str = Field(..., min_length=1, description="作者昵称")
+    fans: int = Field(..., ge=0, description="粉丝数")
+    likes: int = Field(..., ge=0, description="点赞数")
+    collects: int = Field(..., ge=0, description="收藏数")
+    comments: int = Field(..., ge=0, description="评论数")
+    domain: str = Field(..., description="领域，须为 data/domains.yml 中的领域名")
+
+    @field_validator("url")
+    @classmethod
+    def _url_must_be_http(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("url 必须以 http:// 或 https:// 开头")
+        return value
+
+
+class TeardownTag(BaseModel):
+    """周度拆解产出的建议标签（写回 tag_library 累计 heat）。"""
+
+    domain: str
+    tag: str
+
+
+class TeardownSample(BaseModel):
+    """周度拆解对单条样本的结论（写回 viral_samples.reason / title_pattern）。"""
+
+    hot_item_id: int
+    title_pattern: str = ""
+    reason: str = ""
+
+
+class ViralTeardown(BaseModel):
+    """A3 周度拆解输出 Schema（P-1b，M5 与拆解编排之间的契约）。
+
+    LLM 只产出这个结构化 JSON；samples 缺省时按聚合结论回写全部当周样本。
+    """
+
+    title_patterns: list[str] = Field(default_factory=list, description="3-5 条可复制的标题模式")
+    emotion_words: list[str] = Field(default_factory=list, description="高频情绪词")
+    structures: list[str] = Field(default_factory=list, description="结构套路")
+    tags: list[TeardownTag] = Field(default_factory=list, description="建议沉淀的标签")
+    samples: list[TeardownSample] = Field(default_factory=list, description="逐样本结论")

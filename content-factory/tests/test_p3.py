@@ -7,7 +7,7 @@
      每张图可经 /static/assets/... 200 访问
   3. GET /api/articles/{id}/package：xhs ready → 200 ZIP（title.txt / content.txt 末尾
      #标签 / images/NN_kind.png 与 assets 行数一致）；wechat / failed / 不存在 → 409/409/404
-  4. 模板管理：GET /prompts 200 列出两份种子；POST 新建 version+1；PUT 启停翻转；
+  4. 模板管理：GET /prompts 200 列出种子（P-1b 起三份）；POST 新建 version+1；PUT 启停翻转；
      generate 立即按新状态选模板（热更新，以 article.prompt_id 为证）
   5. 发布回填：POST publish → 201 + publish_records 行 + article→published；
      再 generate → 409（published 终态）
@@ -143,11 +143,12 @@ def main() -> int:
 
     print("\n[4] 模板管理页 + 热更新链路")
     resp = client.get("/prompts")
-    check("GET /prompts 200 且列出两份种子模板",
+    check("GET /prompts 200 且列出种子模板",
           resp.status_code == 200 and "wechat" in resp.text and "xhs" in resp.text)
     seeds = client.get("/api/prompts").json()
-    check("种子含 wechat+article 与 xhs+note",
-          {(p["platform"], p["scenario"]) for p in seeds} == {("wechat", "article"), ("xhs", "note")},
+    check("种子含 wechat+article、xhs+note 与 xhs+teardown（P-1b 加 A3）",
+          {(p["platform"], p["scenario"]) for p in seeds}
+          == {("wechat", "article"), ("xhs", "note"), ("xhs", "teardown")},
           str([(p["platform"], p["scenario"], p["version"]) for p in seeds]))
     wechat_v1 = next(p for p in seeds if p["platform"] == "wechat")
     resp = client.post("/api/prompts", json={

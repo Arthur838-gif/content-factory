@@ -1,11 +1,13 @@
-"""Jinja 管理页面（P3 / M8）。"""
+"""Jinja 管理页面（P3 / M8；P-1b 加低粉爆款页）。"""
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, select
 
 from .. import config
+from ..collectors import base as collectors_base
 from ..db import session_scope
-from ..models import Article, Asset, Prompt, Topic
+from ..models import Article, Asset, HotItem, Prompt, Topic, ViralSample
+from ..services import radar
 
 router = APIRouter(tags=["pages"])
 templates = Jinja2Templates(directory=str(config.PROJECT_ROOT / "app" / "templates"))
@@ -39,6 +41,30 @@ def article_page(request: Request, article_id: int):
             raise HTTPException(status_code=404, detail=f"article {article_id} 不存在")
         view = _article_view(session, article)
     return templates.TemplateResponse(request=request, name="article.html", context=view)
+
+
+@router.get("/viral")
+def viral_page(request: Request):
+    """低粉爆款管理页：采集器状态、人工喂样本表单与样本列表（P-1b）。"""
+    with session_scope() as session:
+        rows = session.execute(
+            select(ViralSample, HotItem)
+            .join(HotItem, ViralSample.hot_item_id == HotItem.id)
+            .order_by(desc(ViralSample.viral_score), desc(ViralSample.id))
+            .limit(100)
+        ).all()
+        samples = [
+            {"item": i, "domain": s.domain, "viral_score": s.viral_score,
+             "title_pattern": s.title_pattern, "reason": s.reason,
+             "created_at": s.created_at.strftime("%Y-%m-%d %H:%M") if s.created_at else ""}
+            for s, i in rows
+        ]
+    states = collectors_base.collector_status()
+    return templates.TemplateResponse(
+        request=request,
+        name="viral.html",
+        context={"samples": samples, "states": states, "domains": list(radar.load_domains())},
+    )
 
 
 @router.get("/prompts")

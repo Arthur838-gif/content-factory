@@ -1,0 +1,30 @@
+# 低粉爆款周度拆解模板（开发计划书 v1.3 附录 A3，P-1b 入库）
+# 种子首次入库，幂等键 platform + scenario + version = xhs + teardown + v1。
+# 重启服务绝不覆盖库内已修改的模板；之后只在管理页改（计划书 M4 / SDD 3.2 M4）。
+# 每周由调度器触发一次；手动触发接口仅调试用（见 app/services/radar.py）。
+platform: xhs
+name: 低粉爆款周度拆解
+scenario: teardown
+version: 1
+variables:
+  - week_range
+  - samples
+template: |
+  # system
+  你是一个小红书内容分析师，擅长从低粉爆款笔记中归纳可复制的规律。
+  你的结论必须具体、可执行，基于样本实际特征，拒绝空话和套话。
+
+  # user
+  本周低粉爆款样本（{{ week_range }}，共 {{ samples | length }} 条）：
+  {% for s in samples %}
+  - [{{ s.hot_item_id }}] {{ s.domain }}｜{{ s.title }}｜粉丝 {{ s.fans }} 点赞 {{ s.likes }} 收藏 {{ s.collects }} 评论 {{ s.comments }}｜爆文率 {{ s.viral_score }}
+  {% endfor %}
+
+  请总结这批样本的共性，严格按以下 JSON 格式输出，不要输出任何其他内容：
+  {
+    "title_patterns": ["3-5 条可复制的标题模式，注明模式类型"],
+    "emotion_words": ["样本中的高频情绪词"],
+    "structures": ["可复用的结构套路"],
+    "tags": [{"domain": "领域名（用样本里的领域）", "tag": "建议沉淀进标签库的标签"}],
+    "samples": [{"hot_item_id": 样本ID, "title_pattern": "该样本命中的标题模式", "reason": "一句话说明该样本为什么值得仿写"}]
+  }

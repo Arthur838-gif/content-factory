@@ -1,6 +1,9 @@
-"""M3 选题雷达（P-1a 子集）：领域关键词过滤 + 自动建候选选题（含撞题去重）。
+"""M3 选题雷达：领域关键词过滤 + 自动建候选选题（含撞题去重）+ 低粉爆款引擎（P-1b）。
 
-低粉爆款打分（viral_samples）与周度拆解属 P-1b / M3 全量，不在本阶段。
+P-1b 增量：
+- 低粉爆款打分（纯规则，实时链路不调 LLM）与 viral_samples 落库
+- 自动 / 人工样本共用的 xhs 判定管线 process_xhs_item
+- 周度 LLM 拆解编排（复用 prompt_engine + generator，结论回写样本与标签库）
 """
 import logging
 import re
@@ -10,7 +13,10 @@ import yaml
 from sqlalchemy import or_, select, update
 
 from .. import config
-from ..models import HotItem, Topic
+from ..db import session_scope
+from ..models import HotItem, TagLibrary, Topic, ViralSample
+from ..schemas import ViralTeardown
+from . import generator, prompt_engine
 
 logger = logging.getLogger(__name__)
 
@@ -72,18 +78,84 @@ def jaccard(a: set[str], b: set[str]) -> float:
 def radar_score(item: HotItem) -> float:
     """P-1a 基线分：命中即 1.0，榜单前 50 位次加权最高 +0.5。
 
-    互动数据加权与阈值校准留给 P-1b / P4（TODO(confirm)）。
+    互动数据加权与阈值校准留给 P4（TODO(confirm)）。
     """
     rank = int((item.raw or {}).get("rank") or 0)
     return round(1.0 + max(0, 50 - rank) / 100, 2)
 
 
-def _evidence_snapshot(item: HotItem, domain: str, keyword: str) -> dict:
-    return {
+# ---- 低粉爆款（P-1b，第 6.2 节）----
+def viral_score(item: HotItem) -> float:
+    """爆文率 = (likes + 2×collects + 3×comments) ÷ max(fans, 1)。
+
+    fans 为 0 或空时按 1 计（不除零）；该值只做确定性规则计算，实时链路不调 LLM。
+    """
+    fans = max(item.fans or 0, 1)
+    return round((item.likes + 2 * item.collects + 3 * item.comments) / fans, 4)
+
+
+def is_low_fans_viral(item: HotItem) -> bool:
+    """低粉爆款判定：fans ≤ VIRAL_FANS_MAX 且 viral_score ≥ VIRAL_SCORE_MIN。
+
+    VIRAL_LIKES_MIN 是自动采样候选的预筛（见 process_xhs_item），不进入本判定；
+    fans 高于上限直接否决；阈值初值集中 config.py，校准推迟到 P4。
+    """
+    if (item.fans or 0) > config.VIRAL_FANS_MAX:
+        return False
+    return viral_score(item) >= config.VIRAL_SCORE_MIN
+
+
+def process_xhs_item(
+    session, item: HotItem, domain: str, keyword: str, auto: bool = True
+) -> dict:
+    """xhs 条目统一判定管线：入选 → viral_samples + 自动建题（含撞题去重）。
+
+    auto=True（自动采样）：fans 未知（0）不判定、不伪造（降级只落笔记级数据）；
+    且 likes 未达 VIRAL_LIKES_MIN 预筛的候选直接跳过判定。
+    auto=False（人工喂样本）：fans 为显式录入值，直接判定，与自动样本同一管线。
+    """
+    result = {
+        "viral": False,
+        "viral_score": None,
+        "viral_sample_id": None,
+        "topic_outcome": None,
+        "topic_id": None,
+    }
+    if auto and (item.fans or 0) <= 0:
+        return result  # fans 探针结论 = 不可用：降级模式，只落 hot_items
+    if auto and item.likes < config.VIRAL_LIKES_MIN:
+        return result
+    if not is_low_fans_viral(item):
+        return result
+
+    score = viral_score(item)
+    sample = ViralSample(
+        hot_item_id=item.id,
+        domain=domain,
+        viral_score=score,
+        title_pattern="auto",
+        reason="rule",
+    )
+    session.add(sample)
+    session.flush()
+    outcome, topic = create_or_merge_topic(session, item, domain, keyword, score=score, viral_score=score)
+    result.update(
+        viral=True,
+        viral_score=score,
+        viral_sample_id=sample.id,
+        topic_outcome=outcome,
+        topic_id=topic.id,
+    )
+    return result
+
+
+def _evidence_snapshot(item: HotItem, domain: str, keyword: str, viral: float | None = None) -> dict:
+    snapshot = {
         "hot_item_id": item.id,
         "source": item.source,
         "title": item.title,
         "url": item.url,
+        "author": item.author,
         "captured_at": (item.captured_at or datetime.now()).isoformat(timespec="seconds"),
         "domain": domain,
         "matched_keyword": keyword,
@@ -94,13 +166,24 @@ def _evidence_snapshot(item: HotItem, domain: str, keyword: str) -> dict:
             "comments": item.comments,
         },
     }
+    if viral is not None:
+        snapshot["viral_score"] = viral
+    return snapshot
 
 
-def create_or_merge_topic(session, item: HotItem, domain: str, keyword: str) -> tuple[str, Topic]:
+def create_or_merge_topic(
+    session,
+    item: HotItem,
+    domain: str,
+    keyword: str,
+    score: float | None = None,
+    viral_score: float | None = None,
+) -> tuple[str, Topic]:
     """撞题去重（M3）：近 7 天 status≠archived 且未过期的选题里找最高重叠度。
 
     Jaccard ≥ 0.5 视为同一选题：不新建行，样本快照追加进 evidence、score 取较大值；
     < 0.5 才新建（source=radar，expires_at = created_at + 72h）。
+    score 缺省用 P-1a 基线分；低粉爆款样本传 viral_score 作为选题分。
     """
     now = datetime.now()
     window_start = now - timedelta(days=config.TOPIC_DEDUP_WINDOW_DAYS)
@@ -120,8 +203,8 @@ def create_or_merge_topic(session, item: HotItem, domain: str, keyword: str) -> 
         if sim > best_sim:
             best, best_sim = candidate, sim
 
-    snapshot = _evidence_snapshot(item, domain, keyword)
-    score = radar_score(item)
+    snapshot = _evidence_snapshot(item, domain, keyword, viral=viral_score)
+    score = radar_score(item) if score is None else score
 
     if best is not None and best_sim >= config.TOPIC_JACCARD_THRESHOLD:
         # 必须构造全新容器：JSON 列的旧值若被原地改写，flush 时新旧相等不会发 UPDATE
@@ -166,3 +249,106 @@ def cleanup_hot_items(session) -> int:
     for row in rows:
         session.delete(row)
     return len(rows)
+
+
+# ---- 周度 LLM 拆解（P-1b，附录 A3；唯一允许调 LLM 的雷达链路）----
+def bump_tag(session, domain: str, tag: str, heat: int = 1) -> TagLibrary:
+    """tag_library 累计热度（domain + tag 唯一，存在即 +heat）。"""
+    row = session.scalars(
+        select(TagLibrary).where(TagLibrary.domain == domain, TagLibrary.tag == tag)
+    ).first()
+    if row is None:
+        row = TagLibrary(domain=domain, tag=tag, heat=0)
+        session.add(row)
+        session.flush()
+    row.heat = (row.heat or 0) + heat
+    return row
+
+
+def _fallback_reason(teardown: ViralTeardown) -> str:
+    parts = []
+    if teardown.title_patterns:
+        parts.append("标题模式：" + "；".join(teardown.title_patterns[:3]))
+    if teardown.emotion_words:
+        parts.append("情绪词：" + "、".join(teardown.emotion_words[:6]))
+    if teardown.structures:
+        parts.append("结构：" + "；".join(teardown.structures[:2]))
+    return "｜".join(parts) or "LLM 拆解无有效结论"
+
+
+def run_weekly_teardown(db_path=None) -> dict:
+    """周度拆解：当周 viral_samples 交 LLM（A3 模板）总结模式，结论回写样本与标签库。
+
+    由调度器每周触发一次；手动触发接口仅调试用。复用 prompt_engine 选模板
+    与 generator 的 JSON 解析、重试、usage 记账；无 Key 走 mock 分支。
+    """
+    week_start = datetime.now() - timedelta(days=7)
+    with session_scope(db_path) as session:
+        samples = session.scalars(
+            select(ViralSample).where(ViralSample.created_at >= week_start).order_by(ViralSample.id)
+        ).all()
+        summary = {"samples": len(samples), "reasons_updated": 0, "tags_bumped": 0, "usage": None}
+        if not samples:
+            logger.info("本周无 viral_samples，拆解跳过")
+            return summary
+
+        digest = []
+        for sample in samples[:50]:
+            item = session.get(HotItem, sample.hot_item_id)
+            digest.append(
+                {
+                    "hot_item_id": sample.hot_item_id,
+                    "domain": sample.domain,
+                    "title": item.title if item else "",
+                    "likes": item.likes if item else 0,
+                    "collects": item.collects if item else 0,
+                    "comments": item.comments if item else 0,
+                    "fans": item.fans if item else 0,
+                    "viral_score": sample.viral_score,
+                }
+            )
+
+        _prompt, system_msg, user_msg = prompt_engine.render_messages(
+            session,
+            "xhs",
+            "teardown",
+            {
+                "week_range": f"{week_start:%m-%d} ~ {datetime.now():%m-%d}",
+                "samples": digest,
+            },
+        )
+        result = generator.generate("xhs", ViralTeardown, system_msg, user_msg)
+        if result.article is None:
+            raise RuntimeError(f"周度拆解生成失败：{result.error}")
+        teardown = result.article
+        summary["usage"] = result.usage
+
+        by_id = {s.hot_item_id: s for s in teardown.samples}
+        for sample in samples:
+            hit = by_id.get(sample.hot_item_id)
+            if hit and (hit.reason or hit.title_pattern):
+                if hit.reason:
+                    sample.reason = hit.reason
+                if hit.title_pattern:
+                    sample.title_pattern = hit.title_pattern
+                summary["reasons_updated"] += 1
+
+        if summary["reasons_updated"] == 0:
+            # LLM 未逐条映射（mock 分支即如此）：按聚合结论回写全部当周样本
+            reason = _fallback_reason(teardown)
+            pattern = teardown.title_patterns[0] if teardown.title_patterns else "auto"
+            for sample in samples:
+                sample.reason = reason
+                if sample.title_pattern in (None, "", "auto"):
+                    sample.title_pattern = pattern
+            summary["reasons_updated"] = len(samples)
+
+        for tag in teardown.tags:
+            bump_tag(session, tag.domain, tag.tag)
+            summary["tags_bumped"] += 1
+
+        logger.info(
+            "周度拆解完成：samples=%s reasons_updated=%s tags_bumped=%s",
+            summary["samples"], summary["reasons_updated"], summary["tags_bumped"],
+        )
+        return summary

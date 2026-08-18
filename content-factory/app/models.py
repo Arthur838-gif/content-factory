@@ -167,6 +167,24 @@ class PublishRecord(Base):
     published_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class CollectorState(Base):
+    """collector_state：采集器熔断状态（P-1b）。
+
+    连续失败达到阈值置 status=open（熔断），仅人工恢复（resume）清零；
+    不自动重试不自愈。
+    """
+
+    __tablename__ = "collector_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    status: Mapped[str] = mapped_column(String(16), default="enabled", comment="enabled / open")
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
 ALL_MODELS = (
     Topic,
     Prompt,
@@ -176,4 +194,5 @@ ALL_MODELS = (
     ViralSample,
     TagLibrary,
     PublishRecord,
+    CollectorState,
 )

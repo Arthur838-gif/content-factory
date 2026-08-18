@@ -1,0 +1,47 @@
+{% extends "base.html" %}{% block title %}低粉爆款 · 内容工厂{% endblock %}
+{% block content %}<h1>低粉爆款</h1>
+
+<div class="card"><h3>采集器状态</h3>
+<table><thead><tr><th>采集器</th><th>状态</th><th>连续失败</th><th>最近错误</th><th>操作</th></tr></thead><tbody>
+{% for state in states %}<tr><td>{{ state.name }}</td><td><span class="badge {{ 'failed' if state.status == 'open' else 'ready' }}">{{ '熔断' if state.status == 'open' else '正常' }}</span></td><td>{{ state.consecutive_failures }}</td><td><span class="muted">{{ (state.last_error or '')[:160] }}</span></td>
+<td><div class="actions"><button onclick="runCollector('{{ state.name }}')">立即采样</button><button class="secondary" onclick="resumeCollector('{{ state.name }}')">解除熔断</button></div></td></tr>{% endfor %}
+</tbody></table>
+<p class="actions"><button class="secondary" onclick="runCollector('xhs_sample')">手动采样一轮（xhs_sample）</button><button class="secondary" onclick="runTeardown()">立即周度拆解（调试）</button></p>
+<p class="muted" id="collector-msg"></p></div>
+
+<div class="card"><h3>人工喂样本（降级模式入口）</h3>
+<p class="muted">自动采样拿不到粉丝数时，在此补齐笔记链接与互动数据；录入后与自动样本走同一打分、落库、撞题与建题管线。</p>
+<div class="grid"><div>
+  <label>笔记链接</label><input id="f-url" placeholder="https://www.xiaohongshu/explore/...">
+  <label>标题</label><input id="f-title" placeholder="笔记标题">
+  <label>作者昵称</label><input id="f-author">
+</div><div>
+  <label>领域</label><select id="f-domain">{% for d in domains %}<option>{{ d }}</option>{% endfor %}</select>
+  <div class="grid" style="grid-template-columns:repeat(2,1fr);gap:8px">
+    <div><label>粉丝数</label><input id="f-fans" type="number" min="0" value="0"></div>
+    <div><label>点赞</label><input id="f-likes" type="number" min="0" value="0"></div>
+    <div><label>收藏</label><input id="f-collects" type="number" min="0" value="0"></div>
+    <div><label>评论</label><input id="f-comments" type="number" min="0" value="0"></div>
+  </div>
+</div></div>
+<p class="actions"><button onclick="feedSample()">录入样本</button></p>
+<p class="muted" id="feed-msg"></p></div>
+
+<div class="card"><h3>低粉爆款样本</h3>
+{% if samples %}<table><thead><tr><th>样本</th><th>领域</th><th>爆文率</th><th>粉丝 / 点赞 / 收藏 / 评论</th><th>标题模式</th><th>拆解结论</th><th>入库时间</th></tr></thead><tbody>
+{% for s in samples %}<tr><td><a href="{{ s.item.url }}" target="_blank" rel="noopener">{{ s.item.title }}</a><br><span class="muted">{{ s.item.author or '未知作者' }}</span></td><td>{{ s.domain }}</td><td><strong>{{ "%.2f"|format(s.viral_score) }}</strong></td><td class="muted">{{ s.item.fans }} / {{ s.item.likes }} / {{ s.item.collects }} / {{ s.item.comments }}</td><td>{{ s.title_pattern or '' }}</td><td>{{ (s.reason or '')[:120] }}</td><td class="muted">{{ s.created_at }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="muted">暂无样本；先触发采样或人工录入。</p>{% endif %}</div>
+
+<script>
+async function post(url, body) { const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {method:'POST'}; const r = await fetch(url, opt); const d = await r.json().catch(() => ({})); return {ok: r.ok, status: r.status, data: d}; }
+async function runCollector(name) { const {ok, status, data} = await post(`/api/collectors/${name}/run`); document.getElementById('collector-msg').textContent = ok ? `采样完成：入库 ${data.inserted} 条，新增爆款 ${data.viral_created ?? 0} 条` : `失败（${status}）：${data.detail || ''}`; if (ok) location.reload(); }
+async function resumeCollector(name) { const {ok, status, data} = await post(`/api/admin/collectors/${name}/resume`); document.getElementById('collector-msg').textContent = ok ? `${name} 已恢复` : `失败（${status}）：${data.detail || ''}`; if (ok) location.reload(); }
+async function runTeardown() { const {ok, status, data} = await post('/api/collectors/xhs_teardown/run'); document.getElementById('collector-msg').textContent = ok ? `拆解完成：样本 ${data.samples} 条，结论回写 ${data.reasons_updated} 条` : `失败（${status}）：${data.detail || ''}`; if (ok) location.reload(); }
+async function feedSample() {
+  const body = { url: document.getElementById('f-url').value.trim(), title: document.getElementById('f-title').value.trim(), author: document.getElementById('f-author').value.trim(), domain: document.getElementById('f-domain').value, fans: +document.getElementById('f-fans').value || 0, likes: +document.getElementById('f-likes').value || 0, collects: +document.getElementById('f-collects').value || 0, comments: +document.getElementById('f-comments').value || 0 };
+  const {ok, status, data} = await post('/api/viral-samples/manual', body);
+  document.getElementById('feed-msg').textContent = ok ? `已录入 hot_item=${data.hot_item_id}${data.viral ? `，入选爆款（score=${data.viral_score}，topic=${data.topic_id}）` : '，未达入选阈值'}` : `失败（${status}）：${data.detail || JSON.stringify(data)}`;
+  if (ok) location.reload();
+}
+</script>
+{% endblock %}

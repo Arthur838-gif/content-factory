@@ -3,6 +3,8 @@
 任务一览：
   hotboard   每小时采集一次热榜（M1）
   expire     每小时把到期且仍为 new 的选题置为 archived（第 5 章）
+  xhs_sample 每 6 小时小红书只读采样（M2，P-1b；熔断后自动跳过）
+  teardown   每周一 06:00 低粉爆款周度 LLM 拆解（A3，P-1b）
   backup     每日 03:00 备份 SQLite → data/backups/app_YYYYMMDD.db，保留 7 份
   cleanup    每周日 05:00 物理删除 90 天前的 hot_items（与备份错开 ≥ 1 小时）
 """
@@ -16,6 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from .. import config
 from ..collectors import base as collectors_base
 from ..collectors import hotboard  # noqa: F401  注册 hotboard 采集器
+from ..collectors import xhs_sample  # noqa: F401  注册 xhs_sample 采样器（P-1b）
 from ..db import session_scope
 from . import notify, radar
 
@@ -49,9 +52,29 @@ def backup_database() -> Path:
 def job_hotboard() -> None:
     try:
         collectors_base.run_collector("hotboard")
+    except collectors_base.CircuitOpenError as exc:
+        logger.warning("热榜采集已熔断，跳过本轮：%s", exc)
     except Exception as exc:
         logger.exception("定时热榜采集失败")
         notify.send_alert("ERROR", "hotboard", "定时采集失败", repr(exc))
+
+
+def job_xhs_sample() -> None:
+    try:
+        collectors_base.run_collector("xhs_sample")
+    except collectors_base.CircuitOpenError as exc:
+        logger.warning("小红书采样已熔断，跳过本轮（等待人工恢复）：%s", exc)
+    except Exception as exc:
+        logger.exception("定时小红书采样失败")
+        notify.send_alert("ERROR", "xhs_sample", "定时采样失败", repr(exc))
+
+
+def job_xhs_teardown() -> None:
+    try:
+        radar.run_weekly_teardown()
+    except Exception as exc:
+        logger.exception("周度拆解任务异常")
+        notify.send_alert("ERROR", "xhs_teardown", "周度拆解任务异常", repr(exc))
 
 
 def job_expire_topics() -> None:
@@ -93,6 +116,15 @@ def create_scheduler() -> BackgroundScheduler:
     scheduler.add_job(
         job_expire_topics, "interval", hours=1, id="expire_topics",
         coalesce=True, max_instances=1,
+    )
+    # xhs 采样不随启动立即执行（mcp 未部署时避免启动即连败熔断）；熔断后由 job 内跳过
+    scheduler.add_job(
+        job_xhs_sample, "interval", hours=config.XHS_SAMPLE_INTERVAL_HOURS, id="xhs_sample",
+        coalesce=True, max_instances=1,
+    )
+    scheduler.add_job(
+        job_xhs_teardown, "cron", day_of_week=config.XHS_TEARDOWN_WEEKDAY,
+        hour=config.XHS_TEARDOWN_HOUR, minute=0, id="xhs_teardown", coalesce=True,
     )
     scheduler.add_job(job_backup, "cron", hour=3, minute=0, id="backup", coalesce=True)
     scheduler.add_job(

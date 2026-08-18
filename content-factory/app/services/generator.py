@@ -83,11 +83,28 @@ _MOCK_XHS = {
     "image_quotes": ["工具用得好，下班走得早", "别让重复劳动吃掉人生", "先理清思路，再让AI干活"],
 }
 
+# P-1b 周度拆解 mock：只验证管线结构（reason 回写 + 标签热度累计），非真实质量依据
+_MOCK_TEARDOWN = {
+    "title_patterns": ["数字清单型：N个方法搞定一个具体问题", "反差型：低粉小号也能爆的垂直切口"],
+    "emotion_words": ["真的回不去了", "亲测有效", "直接抄作业", "别再闷头", "省下的时间"],
+    "structures": ["痛点开头 → 数字清单主体 → 互动提问结尾", "个人经历开头 → 方法拆解 → 结果展示"],
+    "tags": [{"domain": "AI与编程", "tag": "AI工具实测"}],
+    "samples": [],
+}
+
 
 def _mock_article(schema_cls: type[T]) -> T:
-    """返回一份符合指定 Schema 的固定 JSON（P0 用 WechatArticle，P1 加 XhsNote）。"""
+    """返回一份符合指定 Schema 的固定 JSON（P0 WechatArticle，P1 XhsNote，P-1b ViralTeardown）。"""
     name = schema_cls.__name__
-    data = _MOCK_WECHAT if name == "WechatArticle" else _MOCK_XHS if name == "XhsNote" else None
+    data = (
+        _MOCK_WECHAT
+        if name == "WechatArticle"
+        else _MOCK_XHS
+        if name == "XhsNote"
+        else _MOCK_TEARDOWN
+        if name == "ViralTeardown"
+        else None
+    )
     if data is None:
         raise ValueError(f"mock 降级未覆盖 Schema：{name}")
     return schema_cls.model_validate(data)

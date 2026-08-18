@@ -40,13 +40,13 @@ HOTBOARD_SOURCES: dict[str, dict[str, str]] = {
 }
 HTTP_TIMEOUT_SECONDS = 15
 
-# ---- 低粉爆款三阈值（第 6.2 节初版，TODO(confirm)：P4 用回填数据校准后固化）----
-VIRAL_FANS_MAX = 5000
-VIRAL_LIKES_MIN = 500
-VIRAL_SCORE_MIN = 2.0
+# ---- 低粉爆款三阈值（第 6.2 节初版；环境变量可热改，TODO(confirm)：P4 用回填数据校准后固化）----
+VIRAL_FANS_MAX = int(os.environ.get("CF_VIRAL_FANS_MAX", "5000"))
+VIRAL_LIKES_MIN = int(os.environ.get("CF_VIRAL_LIKES_MIN", "500"))  # 自动采样候选预筛；人工样本不做该预筛
+VIRAL_SCORE_MIN = float(os.environ.get("CF_VIRAL_SCORE_MIN", "2.0"))
 
 # ---- 选题雷达（部分 M3，P-1a）----
-TOPIC_JACCARD_THRESHOLD = 0.5  # 撞题判定重叠度阈值，初值待 P4 校准
+TOPIC_JACCARD_THRESHOLD = float(os.environ.get("CF_TOPIC_DUPLICATE_JACCARD", "0.5"))  # 撞题阈值，初值待 P4 校准
 TOPIC_DEDUP_WINDOW_DAYS = 7  # 撞题回看窗口
 TOPIC_TTL_HOURS = 72  # radar 选题保鲜：created_at + 72h
 
@@ -57,6 +57,19 @@ BACKUP_KEEP = 7  # 每日备份保留最近 7 份
 # ---- 告警（第 7 章横切约定）----
 NOTIFY_WEBHOOK = os.environ.get("NOTIFY_WEBHOOK", "")
 COLLECTOR_FAIL_ALERT_AFTER = 3  # 连续失败达到该次数即外发告警
+COLLECTOR_CIRCUIT_FAILURES = int(os.environ.get("CF_COLLECTOR_CIRCUIT_FAILURES", "3"))  # 连续失败达到该次数即熔断
+
+# ---- 小红书采样器 M2（P-1b；只读搜索，禁止任何写/互动接口）----
+# xiaohongshu-mcp 以 Go 独立服务跑在本机 Docker，streamable-http 端点 /mcp
+XHS_MCP_BASE_URL = os.environ.get("XHS_MCP_BASE_URL", "http://localhost:18060").rstrip("/")
+XHS_MCP_TIMEOUT_SECONDS = int(os.environ.get("CF_XHS_MCP_TIMEOUT", "30"))
+# 每轮搜索关键词；留空则取 data/domains.yml 全部领域关键词作为检索词
+XHS_SAMPLE_KEYWORDS = [k.strip() for k in os.environ.get("CF_XHS_SAMPLE_KEYWORDS", "").split(",") if k.strip()]
+XHS_SAMPLE_MAX_QUERIES = int(os.environ.get("CF_XHS_SAMPLE_MAX_QUERIES", "20"))
+XHS_SAMPLE_INTERVAL_HOURS = int(os.environ.get("CF_XHS_SAMPLE_INTERVAL_HOURS", "6"))
+# 周度 LLM 拆解（A3）：调度周期 cron 化，周一 06:00（本地时区）
+XHS_TEARDOWN_WEEKDAY = os.environ.get("CF_XHS_TEARDOWN_WEEKDAY", "mon")
+XHS_TEARDOWN_HOUR = int(os.environ.get("CF_XHS_TEARDOWN_HOUR", "6"))
 
 # ---- 运行开关 ----
 RUN_SCHEDULER = os.environ.get("RUN_SCHEDULER", "1") != "0"

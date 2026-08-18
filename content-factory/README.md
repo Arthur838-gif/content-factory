@@ -1,9 +1,56 @@
 # content-factory · 双端内容工厂
 
 公众号 + 小红书双端矩阵内容系统。上游事实来源：《双端内容工厂 · 开发计划书 v1.3》。
-本仓库当前进度：**P3 素材包与预览页**（M8 管理页、素材 ZIP、模板管理与发布回填；P0-P2 文本/出图链路已就绪）。
+本仓库当前进度：**P-1b 低粉爆款引擎**（M2 小红书采样器 + M3 选题雷达分析；P0-P3 文本/出图/素材包链路已就绪）。
 
 > P-1a 已完成：8 表建表、采集/调度/备份/告警/雷达分析就位，`topics` 表有 radar 选题可供生成测试。
+
+## P-1b 低粉爆款引擎
+
+范围仅 M2（小红书采样）+ M3（低粉爆款打分与自动建题）：
+
+- **M2 采样器 `app/collectors/xhs_sample.py`**：经 xiaohongshu-mcp（Docker 本机，
+  `XHS_MCP_BASE_URL`，默认 `http://localhost:18060`）只读调用 `search_notes`；
+  禁止任何写/互动接口。URL 去重、领域过滤沿用采集统一协议。
+- **M3 打分 `app/services/radar.py`**：`viral_score = (likes + 2×collects + 3×comments) ÷ max(fans,1)`，
+  实时判定纯规则不调 LLM；阈值 `CF_VIRAL_FANS_MAX=5000 / CF_VIRAL_LIKES_MIN=500 / CF_VIRAL_SCORE_MIN=2.0`
+  环境变量可热改（P4 校准）。入选样本写 `viral_samples` 并自动建 `topics(source=radar, status=new)`
+  （发现不决策），撞题去重走标题 Jaccard ≥ 0.5（`CF_TOPIC_DUPLICATE_JACCARD`）。
+- **fans 探针结论（docs/p-1b-fans-probe.md）**：本开发环境未部署 mcp，`fans_available=false`，
+  走降级模式——自动采样只落 `hot_items` 笔记级数据，低粉爆款经
+  `POST /api/viral-samples/manual`（或管理页 `/viral` 人工喂样本表单）补齐 fans 后进入同一管线。
+  真实环境部署 mcp 后执行 `python -m app.collectors.xhs_sample probe` 重跑探针并更新该文档即可，
+  代码无感切换（条目 fans>0 即自动参与判定）。
+- **周度拆解（附录 A3）**：每周一 06:00 调度（`CF_XHS_TEARDOWN_WEEKDAY/HOUR`），把当周
+  `viral_samples` 交 LLM 总结标题模式/情绪词/结构套路，结论回写样本 `reason` 并累计
+  `tag_library.heat`；手动触发仅调试用：`POST /api/collectors/xhs_teardown/run`。
+  模板种子 `prompts/xhs_teardown.yml`（幂等键 `xhs+teardown+v1`），无 Key 走 mock。
+- **熔断**：M2 连续失败 3 次（`CF_COLLECTOR_CIRCUIT_FAILURES`）自动熔断并经 `NOTIFY_WEBHOOK`
+  告警一次；熔断期间触发返回 409，只能 `POST /api/admin/collectors/xhs_sample/resume` 人工恢复，
+  不自动重试不自愈。状态见 `GET /api/admin/collectors` 或 `/viral` 页面。
+
+### P-1b 验收脚本
+
+```bash
+.venv/Scripts/python tests/test_p1b.py
+```
+
+覆盖结构验收 1-9：探针记录、M2 协议（mock 响应/去重/过滤/fans 降级）、打分边界
+（0.1 / 2.6 / fans=0 不除零）、落库建题证据、撞题合并（score 取大、evidence 追加）、
+人工喂样本 422/409、A3 幂等入库与 mock 拆解回写、熔断演练（告警一次、409、人工恢复）。
+
+### P-1b 真实质量验收（需专用数据小号与 mcp 服务）
+
+1. 按仓库外操作说明用 Docker 起 xiaohongshu-mcp，专用数据小号扫码登录（凭据不进仓库）；
+   `.env` 配 `XHS_MCP_BASE_URL`。
+2. `.venv/Scripts/python -m app.collectors.xhs_sample probe "AI工具"` 重跑 fans 探针，
+   结论更新进 `docs/p-1b-fans-probe.md`。
+3. 自动模式：连续 3 天采样（`POST /api/collectors/xhs_sample/run` 或等调度）；
+   降级模式：连续 3 天经 `/viral` 页面人工录入。验收线：`viral_samples ≥ 5`，
+   人工抽查过半数"确实值得仿写"。
+4. 熔断演练：`XHS_MCP_BASE_URL` 临时指向无效地址连触 3 次，确认熔断 + 告警一次 + 409；
+   恢复服务后仍需 `POST /api/admin/collectors/xhs_sample/resume` 显式解除。
+5. 采样期间严禁任何关注、点赞、评论、私信、回关、发布操作。
 
 ## P3 管理页与素材包
 
@@ -148,8 +195,11 @@ P1 交付 `schemas.py`（补 `XhsNote`）、`adapters/xhs.py`（M7 文案适配�
 `prompts/xhs_note.yml`（A1 种子）、`data/sensitive_xhs.txt`、`tests/test_p1.py`。
 P2 交付 `services/imaging.py`（共享图文服务）、`adapters/xhs.py` 的 `render_assets`
 （出图 + assets 登记）、`data/imaging_templates/` 四套版式、`data/fonts/` 思源黑体、
-`tests/test_p2.py`。
-其余模块（M2 采样、M6 草稿箱、M8 素材包（P3））按路线图在后续阶段交付。
+`tests/test_p2.py`。P-1b 交付 `collectors/xhs_sample.py`（M2 采样器 + fans 探针）、
+`services/radar.py` 低粉爆款打分与周度拆解、`api/routes_viral_samples.py`（样本列表 +
+人工喂样本）、`templates/viral.html`（`/viral` 管理页）、`prompts/xhs_teardown.yml`（A3 种子）、
+`docs/p-1b-fans-probe.md`（探针记录）、`tests/test_p1b.py`。
+其余模块（M6 草稿箱等）按路线图在后续阶段交付。
 
 ## 定时任务（APScheduler）
 
@@ -157,5 +207,7 @@ P2 交付 `services/imaging.py`（共享图文服务）、`adapters/xhs.py` 的 
 | --- | --- | --- |
 | hotboard | 每小时 | 热榜采集（启动即跑一轮） |
 | expire_topics | 每小时 | 到期 radar 选题归档（created_at + 72h） |
+| xhs_sample | 每 6 小时 | 小红书只读采样（M2，P-1b；熔断后跳过，等人工恢复） |
+| xhs_teardown | 每周一 06:00 | 低粉爆款周度 LLM 拆解（A3，P-1b） |
 | backup | 每日 03:00 | SQLite 备份到 `data/backups/app_YYYYMMDD.db`，保留 7 份 |
 | cleanup | 每周日 05:00 | 物理删除 90 天前的 hot_items（与备份错开 ≥ 1 小时） |

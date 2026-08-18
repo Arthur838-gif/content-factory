@@ -10,7 +10,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from . import config
-from .api import routes_admin, routes_articles, routes_pages, routes_prompts, routes_topics
+from .api import (
+    routes_admin,
+    routes_articles,
+    routes_pages,
+    routes_prompts,
+    routes_topics,
+    routes_viral_samples,
+)
 from .db import init_db
 from .services import prompt_engine
 from .services.scheduler import create_scheduler
@@ -44,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_topics.router)
     app.include_router(routes_articles.router)
     app.include_router(routes_prompts.router)
+    app.include_router(routes_viral_samples.router)
     app.include_router(routes_pages.router)
 
     @app.get("/static/assets/{article_id}/{filename:path}", include_in_schema=False)
