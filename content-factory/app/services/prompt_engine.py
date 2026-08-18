@@ -51,19 +51,22 @@ def _split_template(template: str) -> tuple[str, str]:
         <system 段>
         # user
         <user 段>
+    仅以 "#" 开头的行可作标记（正文里恰好是 "system"/"user" 的普通行不会被误判）；
     标记行允许前后空白；缺任一段时返回空串。
     """
     system_lines: list[str] = []
     user_lines: list[str] = []
     target: list[str] | None = None
     for line in template.splitlines():
-        stripped = line.strip().lstrip("#").strip().lower()
-        if stripped == "system":
-            target = system_lines
-            continue
-        if stripped == "user":
-            target = user_lines
-            continue
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            marker = stripped.lstrip("#").strip().lower()
+            if marker == "system":
+                target = system_lines
+                continue
+            if marker == "user":
+                target = user_lines
+                continue
         if target is not None:
             target.append(line)
     # 去掉尾部空行
@@ -82,11 +85,20 @@ def _render(tpl: str, variables: dict) -> str:
 
 
 def select_prompt(session, platform: str, scenario: str, prompt_id: int | None = None) -> Prompt:
-    """取模板：传 prompt_id 用指定模板；否则取 enabled 中 version 最大的一条。"""
+    """取模板：传 prompt_id 用指定模板；否则取 enabled 中 version 最大的一条。
+
+    prompt_id 必须属于请求的 platform/scenario——跨场景套用模板会因变量不匹配
+    在渲染层炸出 500，在这里直接 409 拦下。
+    """
     if prompt_id is not None:
         prompt = session.get(Prompt, prompt_id)
         if prompt is None:
             raise PromptNotFoundError(f"prompt_id={prompt_id} 不存在")
+        if prompt.platform != platform or prompt.scenario != scenario:
+            raise PromptNotFoundError(
+                f"prompt_id={prompt_id} 属于 {prompt.platform}/{prompt.scenario}，"
+                f"不能用于 {platform}/{scenario}"
+            )
         return prompt
     prompt = session.scalars(
         select(Prompt)

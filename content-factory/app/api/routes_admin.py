@@ -12,10 +12,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["admin"])
 
-# 伪采集器：非 fetch() 协议、可手动触发的运维任务（调试用）
-_TEARDOWN_TASKS = {
-    "xhs_teardown": lambda: radar.run_weekly_teardown(),
-}
+# 手动触发的运维任务统一登记进 collectors.base._MANUAL_TASKS（伪采集器：
+# 非 fetch() 协议、不参与熔断，仅调试/演练用）；此处只做登记，不建平行注册表
+collectors_base.register_manual_task("xhs_teardown", radar.run_weekly_teardown)
 
 
 @router.post("/collectors/{name}/run")
@@ -23,18 +22,24 @@ def trigger_collector(name: str):
     """手动触发一次采集（调试用）。name: hotboard / xhs_sample / xhs_teardown。
 
     409 = 采集器已熔断（需人工恢复）；502 = mcp 等上游失败（失败计数 +1）。
+    502 detail 只回类型化摘要，不回 repr(exc)——异常文本可能带内部路径/地址。
     """
-    if name in _TEARDOWN_TASKS:
+    task = collectors_base.get_manual_task(name)
+    if task is not None:
         try:
-            summary = _TEARDOWN_TASKS[name]()
+            summary = task()
         except Exception as exc:
             logger.exception("手动任务 %s 失败", name)
-            raise HTTPException(status_code=502, detail=f"任务失败：{exc!r}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"任务失败（{type(exc).__name__}）：{str(exc)[:200]}"
+            ) from exc
         return {"collector": name, **summary}
     try:
         return collectors_base.run_collector(name)
     except collectors_base.UnknownCollectorError:
-        available = "、".join(collectors_base.available_collectors() + sorted(_TEARDOWN_TASKS))
+        available = "、".join(
+            collectors_base.available_collectors() + collectors_base.available_tasks()
+        )
         raise HTTPException(
             status_code=404,
             detail=f"未知采集器 {name}；当前可用：{available}",
@@ -46,7 +51,9 @@ def trigger_collector(name: str):
         ) from None
     except Exception as exc:
         logger.exception("手动采集 %s 失败", name)
-        raise HTTPException(status_code=502, detail=f"采集失败：{exc!r}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"采集失败（{type(exc).__name__}）：{str(exc)[:200]}"
+        ) from exc
 
 
 @router.get("/admin/collectors")

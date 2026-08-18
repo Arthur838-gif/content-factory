@@ -135,8 +135,9 @@ def main() -> int:
     rows2 = _assets_of(aid2)
     check("新目录文件数与 assets 行数一致", len(files2) == len(rows2) >= 3, str(files2))
     check("新目录无残留外来文件", all(f.endswith(".png") for f in files2), str(files2))
-    check("旧 article 目录保留（回溯）", (config.ASSETS_DIR / str(aid1) / "junk.txt").exists()
-          or len(list((config.ASSETS_DIR / str(aid1)).iterdir())) > 0)
+    check("旧 article 目录保留（回溯，脏文件仍在）",
+          (config.ASSETS_DIR / str(aid1) / "junk.txt").exists(),
+          str(sorted(p.name for p in (config.ASSETS_DIR / str(aid1)).iterdir())))
     check("旧 article 的 assets 行保留", len(_assets_of(aid1)) == len(rows))
     # render_assets 幂等：同 article 重复渲染不重复登记
     with session_scope() as s:

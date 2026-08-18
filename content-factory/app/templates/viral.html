@@ -29,7 +29,7 @@
 
 <div class="card"><h3>低粉爆款样本</h3>
 {% if samples %}<table><thead><tr><th>样本</th><th>领域</th><th>爆文率</th><th>粉丝 / 点赞 / 收藏 / 评论</th><th>标题模式</th><th>拆解结论</th><th>入库时间</th></tr></thead><tbody>
-{% for s in samples %}<tr><td><a href="{{ s.item.url }}" target="_blank" rel="noopener">{{ s.item.title }}</a><br><span class="muted">{{ s.item.author or '未知作者' }}</span></td><td>{{ s.domain }}</td><td><strong>{{ "%.2f"|format(s.viral_score) }}</strong></td><td class="muted">{{ s.item.fans }} / {{ s.item.likes }} / {{ s.item.collects }} / {{ s.item.comments }}</td><td>{{ s.title_pattern or '' }}</td><td>{{ (s.reason or '')[:120] }}</td><td class="muted">{{ s.created_at }}</td></tr>{% endfor %}
+{% for s in samples %}<tr><td><a href="{{ s.item.url if s.item.url and s.item.url.startswith(('http://','https://')) else '#' }}" target="_blank" rel="noopener">{{ s.item.title }}</a><br><span class="muted">{{ s.item.author or '未知作者' }}</span></td><td>{{ s.domain }}</td><td><strong>{{ "%.2f"|format(s.viral_score) }}</strong></td><td class="muted">{{ s.item.fans }} / {{ s.item.likes }} / {{ s.item.collects }} / {{ s.item.comments }}</td><td>{{ s.title_pattern or '' }}</td><td>{{ (s.reason or '')[:120] }}</td><td class="muted">{{ s.created_at }}</td></tr>{% endfor %}
 </tbody></table>{% else %}<p class="muted">暂无样本；先触发采样或人工录入。</p>{% endif %}</div>
 
 <script>

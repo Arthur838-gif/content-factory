@@ -8,6 +8,7 @@ P-1b：熔断状态持久化到 collector_state（连续失败 3 次熔断、只
 """
 import logging
 from abc import ABC, abstractmethod
+from typing import Callable
 
 from sqlalchemy import select
 
@@ -48,16 +49,20 @@ class FailureTracker:
     def __init__(self, alert_after: int = config.COLLECTOR_FAIL_ALERT_AFTER):
         self.alert_after = alert_after
         self._counts: dict[str, int] = {}
+        self._alerted: set[str] = set()
 
     def track_failure(self, key: str, detail: str = "") -> int:
         count = self._counts.get(key, 0) + 1
         self._counts[key] = count
-        if count >= self.alert_after:
+        # 达到阈值只告警一次；恢复成功后重新武装，可再次告警（防告警风暴）
+        if count >= self.alert_after and key not in self._alerted:
+            self._alerted.add(key)
             notify.send_alert("WARN", "collector", f"{key} 连续失败 {count} 次", detail)
         return count
 
     def track_success(self, key: str) -> None:
         self._counts.pop(key, None)
+        self._alerted.discard(key)
 
 
 failure_tracker = FailureTracker()
@@ -131,7 +136,7 @@ def collector_status(db_path=None) -> list[dict]:
         ]
 
 
-def persist_hot_items(session, items: list[HotItem]) -> CollectorRunResult:
+def persist_hot_items(session, items: list[HotItem], collector: str = "") -> CollectorRunResult:
     """去重 → 领域过滤 → 入库 → 自动建选题。
 
     热榜条目（weibo/zhihu/baidu）：命中领域即建候选选题（P-1a 行为）。
@@ -152,12 +157,13 @@ def persist_hot_items(session, items: list[HotItem]) -> CollectorRunResult:
         ).all()
     )
 
+    domains = radar.load_domains()  # 整批只读一次领域词表，不逐条读盘
     created = merged = filtered_out = inserted = viral_created = 0
     for url, item in batch.items():
         if url in existing:
             duplicates_skipped += 1
             continue
-        matched = radar.match_domain(item.title)
+        matched = radar.match_domain(item.title, domains)
         if matched is None:
             filtered_out += 1
             continue
@@ -193,7 +199,7 @@ def persist_hot_items(session, items: list[HotItem]) -> CollectorRunResult:
         inserted += 1
 
     return CollectorRunResult(
-        collector="",
+        collector=collector,
         fetched=fetched,
         duplicates_skipped=duplicates_skipped,
         filtered_out=filtered_out,
@@ -225,8 +231,7 @@ def run_collector(name: str) -> CollectorRunResult:
         raise
     record_success(name)
     with session_scope() as session:
-        result = persist_hot_items(session, items)
-    result.collector = name
+        result = persist_hot_items(session, items, collector=name)
     logger.info(
         "采集完成 %s：fetched=%s inserted=%s dup=%s filtered=%s topics(+%s/merge %s) viral=%s",
         name, result.fetched, result.inserted, result.duplicates_skipped,
@@ -252,3 +257,22 @@ def get_collector(name: str) -> BaseCollector:
 
 def available_collectors() -> list[str]:
     return sorted(_REGISTRY)
+
+
+# ---- 手动触发的运维任务（非 fetch 协议，不参与熔断）----
+# 采集器之外的可手动触发任务统一登记于此（如 xhs_teardown），路由层从
+# available_tasks() 读清单，不再各自维护伪注册表；任务实现方 import 本模块
+# 后调 register_manual_task 登记（避免本模块反向依赖 services 造成环）。
+_MANUAL_TASKS: dict[str, Callable] = {}
+
+
+def register_manual_task(name: str, fn: Callable) -> None:
+    _MANUAL_TASKS[name] = fn
+
+
+def get_manual_task(name: str) -> Callable | None:
+    return _MANUAL_TASKS.get(name)
+
+
+def available_tasks() -> list[str]:
+    return sorted(_MANUAL_TASKS)

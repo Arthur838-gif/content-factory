@@ -11,6 +11,7 @@
 import logging
 import sqlite3
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -49,62 +50,66 @@ def backup_database() -> Path:
     return dest
 
 
+def _scheduled_job(module: str, event: str):
+    """定时任务统一包装：异常记日志（含堆栈）并外发告警，绝不让任务异常逃出调度器。
+
+    CircuitOpenError 由 job 体自己先接住（那是预期内的跳过，只 warning 不告警）。
+    """
+
+    def deco(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:
+                logger.exception("%s 任务异常", fn.__name__)
+                notify.send_alert("ERROR", module, event, repr(exc))
+
+        return wrapper
+
+    return deco
+
+
+@_scheduled_job("hotboard", "定时采集失败")
 def job_hotboard() -> None:
     try:
         collectors_base.run_collector("hotboard")
     except collectors_base.CircuitOpenError as exc:
         logger.warning("热榜采集已熔断，跳过本轮：%s", exc)
-    except Exception as exc:
-        logger.exception("定时热榜采集失败")
-        notify.send_alert("ERROR", "hotboard", "定时采集失败", repr(exc))
 
 
+@_scheduled_job("xhs_sample", "定时采样失败")
 def job_xhs_sample() -> None:
     try:
         collectors_base.run_collector("xhs_sample")
     except collectors_base.CircuitOpenError as exc:
         logger.warning("小红书采样已熔断，跳过本轮（等待人工恢复）：%s", exc)
-    except Exception as exc:
-        logger.exception("定时小红书采样失败")
-        notify.send_alert("ERROR", "xhs_sample", "定时采样失败", repr(exc))
 
 
+@_scheduled_job("xhs_teardown", "周度拆解任务异常")
 def job_xhs_teardown() -> None:
-    try:
-        radar.run_weekly_teardown()
-    except Exception as exc:
-        logger.exception("周度拆解任务异常")
-        notify.send_alert("ERROR", "xhs_teardown", "周度拆解任务异常", repr(exc))
+    radar.run_weekly_teardown()
 
 
+@_scheduled_job("scheduler", "选题过期归档任务异常")
 def job_expire_topics() -> None:
-    try:
-        with session_scope() as session:
-            archived = radar.archive_expired_topics(session)
-        if archived:
-            logger.info("过期选题归档 %s 条", archived)
-    except Exception as exc:
-        logger.exception("选题过期归档任务异常")
-        notify.send_alert("ERROR", "scheduler", "选题过期归档任务异常", repr(exc))
+    with session_scope() as session:
+        archived = radar.archive_expired_topics(session)
+    if archived:
+        logger.info("过期选题归档 %s 条", archived)
 
 
+@_scheduled_job("backup", "每日备份失败")
 def job_backup() -> None:
-    try:
-        backup_database()
-    except Exception as exc:
-        logger.exception("每日备份失败")
-        notify.send_alert("ERROR", "backup", "每日备份失败", repr(exc))
+    backup_database()
 
 
+@_scheduled_job("cleanup", "数据清理任务异常")
 def job_cleanup() -> None:
-    try:
-        with session_scope() as session:
-            removed = radar.cleanup_hot_items(session)
-        if removed:
-            logger.info("清理 90 天前 hot_items %s 条", removed)
-    except Exception as exc:
-        logger.exception("数据清理任务异常")
-        notify.send_alert("ERROR", "cleanup", "数据清理任务异常", repr(exc))
+    with session_scope() as session:
+        removed = radar.cleanup_hot_items(session)
+    if removed:
+        logger.info("清理 90 天前 hot_items %s 条", removed)
 
 
 def create_scheduler() -> BackgroundScheduler:

@@ -5,7 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -50,12 +50,17 @@ def _article_dict(article: Article, assets: list[Asset] | None = None) -> dict:
 
 
 @router.get("/articles")
-def list_articles(topic_id: int | None = None) -> list[dict]:
+def list_articles(
+    topic_id: int | None = None,
+    limit: int = Query(500, ge=1, le=2000, description="分页上限，防全表膨胀拖垮响应"),
+    offset: int = Query(0, ge=0),
+) -> list[dict]:
     """列出文章，供管理页与同源页面脚本读取。"""
     with session_scope() as session:
         statement = select(Article).order_by(Article.created_at.desc(), Article.id.desc())
         if topic_id is not None:
             statement = statement.where(Article.topic_id == topic_id)
+        statement = statement.limit(limit).offset(offset)
         return [_article_dict(article) for article in session.scalars(statement).all()]
 
 
@@ -112,17 +117,29 @@ def download_package(article_id: int) -> StreamingResponse:
     )
 
 
+class PublishMetrics(BaseModel):
+    """回填互动数据：非负、封顶 10^9（防脏数据/溢出写进 publish_records）。"""
+
+    model_config = {"extra": "allow"}  # 未来加字段（如 shares）不破坏旧调用方
+
+    likes: int = Field(default=0, ge=0, le=10**9)
+    collects: int = Field(default=0, ge=0, le=10**9)
+    comments: int = Field(default=0, ge=0, le=10**9)
+
+
 class PublishRequest(BaseModel):
     platform: str
-    account: str = ""
-    url: str | None = None
-    metrics: dict = Field(default_factory=dict)
+    account: str = Field(default="", max_length=100)
+    url: str | None = Field(default=None, max_length=1000)
+    metrics: PublishMetrics = Field(default_factory=PublishMetrics)
 
 
 @router.post("/articles/{article_id}/publish", status_code=201)
 def publish_article(article_id: int, payload: PublishRequest) -> dict:
     """追加一条发布回填记录，并把文章置为 published 终态。
 
+    409 = 文章非 ready/published 状态（archived/failed 行不能回填，先重新生成）；
+    422 = 回填 platform 与文章 platform 不一致（归因错位会污染双端报表）。
     P4 副作用：回填事务提交后触发 scoring.recompute()，让回填数据即时反哺
     topics.score 与排序。重算失败不影响已提交的回填（只记日志），可手动重算补齐。
     """
@@ -130,12 +147,22 @@ def publish_article(article_id: int, payload: PublishRequest) -> dict:
         article = session.get(Article, article_id)
         if article is None:
             raise HTTPException(status_code=404, detail=f"article {article_id} 不存在")
+        if article.status not in ("ready", "published"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"仅 ready/published 文章可回填，当前 status={article.status}；请先重新生成",
+            )
+        if payload.platform != article.platform:
+            raise HTTPException(
+                status_code=422,
+                detail=f"回填 platform={payload.platform} 与文章 platform={article.platform} 不一致",
+            )
         record = PublishRecord(
             article_id=article.id,
             platform=payload.platform,
             account=payload.account,
             url=payload.url,
-            metrics=payload.metrics,
+            metrics=payload.metrics.model_dump(),
         )
         session.add(record)
         article.status = "published"

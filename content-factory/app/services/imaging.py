@@ -96,6 +96,14 @@ def load_template(name: str) -> dict:
         raise ImagingError(f"版式 YAML 损坏 {path}：{exc}") from exc
     if not isinstance(tpl, dict) or "canvas" not in tpl or "slots" not in tpl:
         raise ImagingError(f"版式缺少 canvas/slots 字段：{path}")
+    canvas = tpl["canvas"]
+    # 提前拦住缺 width/height 的坏版式：留到 render 里就是裸 KeyError 逃逸
+    if (
+        not isinstance(canvas, dict)
+        or not isinstance(canvas.get("width"), int)
+        or not isinstance(canvas.get("height"), int)
+    ):
+        raise ImagingError(f"版式 canvas 缺少整数 width/height：{path}")
     return tpl
 
 
@@ -213,15 +221,14 @@ def render_note_images(
             if q and str(q).strip():
                 plan.append(("quote", config.IMAGING_QUOTE_TEMPLATE, str(q)))
         results: list[RenderedImage] = []
-        canvas_cache: dict[str, tuple[int, int]] = {}
         for idx, (kind, tpl_name, text) in enumerate(plan, start=1):
             img = render(tpl_name, {"headline": text, "quote": text, **texts_common})
-            if tpl_name not in canvas_cache:
-                c = load_template(tpl_name)["canvas"]
-                canvas_cache[tpl_name] = (int(c["width"]), int(c["height"]))
-            w, h = canvas_cache[tpl_name]
+            w, h = img.size  # 画布尺寸直接取自产物，不再二次 load_template
             filename = f"{idx:02d}_{'cover' if kind == 'cover' else 'quote'}.png"
-            img.save(out_dir / filename, format="PNG")
+            try:
+                img.save(out_dir / filename, format="PNG")
+            finally:
+                img.close()
             results.append(
                 RenderedImage(kind=kind, filename=filename, width=w, height=h)
             )
@@ -232,6 +239,11 @@ def render_note_images(
     except OSError as exc:
         _clear_dir(out_dir)
         raise ImagingError(f"图片写盘失败：{exc}") from exc
+    except Exception as exc:
+        # 版式字段缺失等意外错误统一收敛成 ImagingError：
+        # 调用方（routes_topics）只认 ImagingError，裸 KeyError 会导致 500 而非 failed 落库
+        _clear_dir(out_dir)
+        raise ImagingError(f"图文合成意外失败：{exc}") from exc
 
 
 def render_wechat_cover(text: str, out_path: str | Path) -> RenderedImage:
@@ -240,7 +252,10 @@ def render_wechat_cover(text: str, out_path: str | Path) -> RenderedImage:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     img = render("wechat_cover", {"headline": text})
     out_path.unlink(missing_ok=True)
-    img.save(out_path, format="PNG")
+    try:
+        img.save(out_path, format="PNG")
+    finally:
+        img.close()
     return RenderedImage(
         kind="cover", filename=out_path.name, width=img.width, height=img.height
     )

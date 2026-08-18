@@ -12,16 +12,29 @@
 """
 import logging
 import math
+import re
 from datetime import datetime
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import func, select
 
 from .. import config
 from ..db import session_scope
-from ..models import Article, HotItem, Prompt, PublishRecord, Topic, ViralSample
+from ..models import Article, Prompt, PublishRecord, Topic, ViralSample
 from . import radar
 
 logger = logging.getLogger(__name__)
+
+_MONTH_RE = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
+
+
+def normalize_month(month: str | None) -> str | None:
+    """month 缺省 → 当月；形如 YYYY-MM 且为真实月份 → 原样返回；否则 None。
+
+    cost API 与 /stats 页面共用，保证"9999-99"这类值在两个入口都被 422。
+    """
+    if month is None:
+        return datetime.now().strftime("%Y-%m")
+    return month if _MONTH_RE.match(month) else None
 
 
 def engagement(metrics: dict | None) -> float:
@@ -192,6 +205,8 @@ def cost_report(month: str | None = None, db_path=None) -> dict:
     history: dict[str, dict[str, dict]] = {}
     for article in articles:
         usage = _usage_of(article)
+        if usage["model"] == "mock":
+            continue  # mock 脚手架行零成本，混入只会稀释"平均单篇成本"
         if not (usage["model"] or usage["prompt_tokens"] or usage["completion_tokens"]):
             continue  # 无 usage 记账的行不进成本口径
         ym = article.created_at.strftime("%Y-%m") if article.created_at else "unknown"
@@ -288,12 +303,9 @@ def calibration_view(db_path=None) -> dict:
     校准结论由周四校准会人工拍板后改环境变量并记录 docs/p4-calibration.md。
     """
     with session_scope(db_path) as session:
-        rows = session.execute(
-            select(ViralSample, HotItem)
-            .join(HotItem, ViralSample.hot_item_id == HotItem.id)
-            .order_by(desc(ViralSample.viral_score), desc(ViralSample.id))
-            .limit(200)
-        ).all()
+        # 全量拉取：summary 必须反映总体（limit 截断后"最少/均值"会失真）；
+        # 展示列表另行截 200 条。样本量增长到万级时改为 SQL 聚合下推。
+        rows = session.execute(radar.query_viral_samples(session)).all()
         effect = _published_effect_by_hot_item(session)
 
     samples = []
@@ -323,7 +335,7 @@ def calibration_view(db_path=None) -> dict:
             "topic_duplicate_jaccard": config.TOPIC_JACCARD_THRESHOLD,
             "note": "修改方式：环境变量 CF_VIRAL_FANS_MAX / CF_VIRAL_LIKES_MIN / CF_VIRAL_SCORE_MIN / CF_TOPIC_DUPLICATE_JACCARD（改后重启进程或运行中改 config 属性即生效）；结论记录到 docs/p4-calibration.md",
         },
-        "samples": samples,
+        "samples": samples[:200],
         "summary": {
             "sample_count": len(samples),
             "would_pass_now": sum(1 for s in samples if s["would_pass_now"]),

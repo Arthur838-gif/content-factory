@@ -103,7 +103,7 @@ def main() -> int:
     assets = _assets_of(aid1)
     check("三区文案与 articles 行一致", art.title in html and "copy-content" in html
           and "copy-tags" in html)
-    check("复制按钮与素材包下载入口", "navigator.clipboard" in html or "copyText(" in html
+    check("复制按钮与素材包下载入口", ("navigator.clipboard" in html or "copyText(" in html)
           and f"/api/articles/{aid1}/package" in html)
     check("图片区张数与 assets 行数一致", html.count("/static/assets/") >= len(assets) * 2,
           f"{html.count('/static/assets/')} 处引用 / {len(assets)} 行")

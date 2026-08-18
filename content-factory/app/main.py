@@ -5,9 +5,10 @@ RUN_SCHEDULER=0 可只起 API 不起定时任务（调试用）。
 """
 import logging
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 
 from . import config
 from .api import (
@@ -48,6 +49,28 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="content-factory", version="0.1.0", lifespan=lifespan)
+
+    # 本机单用户服务（部署约定：只绑 127.0.0.1）。无 Cookie 会话，CSRF 面主要在
+    # "恶意页面借本机浏览器发跨站 POST"（DNS rebinding / 钓鱼页）——用 Host 白名单
+    # 挡 rebinding、Origin 白名单挡跨站写。"testserver" 是 FastAPI TestClient 的
+    # 默认 Host，放行以保住测试链路。
+    allowed_hosts = {"127.0.0.1", "localhost", "testserver", "::1"}
+
+    @app.middleware("http")
+    async def guard_local_only(request: Request, call_next):
+        raw_host = (request.headers.get("host") or "").strip().lower()
+        # "127.0.0.1:8000" 去端口；"[::1]:8000" 去端口再去方括号
+        host = raw_host.rsplit(":", 1)[0] if raw_host.startswith("[") else raw_host.split(":")[0]
+        host = host.strip("[]")
+        if host not in allowed_hosts:
+            return JSONResponse({"detail": "forbidden host"}, status_code=403)
+        origin = request.headers.get("origin")
+        if origin:
+            origin_host = (urlparse(origin).hostname or "").lower()
+            if origin_host and origin_host not in allowed_hosts:
+                return JSONResponse({"detail": "forbidden origin"}, status_code=403)
+        return await call_next(request)
+
     app.include_router(routes_admin.router)
     app.include_router(routes_topics.router)
     app.include_router(routes_articles.router)

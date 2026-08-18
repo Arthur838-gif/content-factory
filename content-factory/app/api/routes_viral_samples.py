@@ -2,7 +2,8 @@
 import logging
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import desc, select
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from ..db import session_scope
 from ..models import HotItem as HotItemORM
@@ -19,15 +20,9 @@ router = APIRouter(prefix="/api", tags=["viral-samples"])
 def list_viral_samples(domain: str | None = None, limit: int = Query(50, ge=1, le=200)) -> list[dict]:
     """按 viral_score 倒序返回样本，附 hot_item 关键互动数据（evidence 摘要）。"""
     with session_scope() as session:
-        query = (
-            select(ViralSample, HotItemORM)
-            .join(HotItemORM, ViralSample.hot_item_id == HotItemORM.id)
-            .order_by(desc(ViralSample.viral_score), desc(ViralSample.id))
-            .limit(limit)
-        )
-        if domain:
-            query = query.where(ViralSample.domain == domain)
-        rows = session.execute(query).all()
+        rows = session.execute(
+            radar.query_viral_samples(session, domain=domain).limit(limit)
+        ).all()
         return [
             {
                 "id": sample.id,
@@ -84,7 +79,13 @@ def create_manual_sample(payload: ManualSampleInput) -> dict:
             raw={"entry": "manual"},
         )
         session.add(row)
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            # URL 唯一约束兜底：检查与插入之间可能有并发写入，命中即 409 回滚
+            raise HTTPException(
+                status_code=409, detail=f"该笔记 URL 已入库，不重复录入（{payload.url}）"
+            ) from exc
 
         matched = radar.match_domain(payload.title)
         keyword = matched[1] if matched else "manual"

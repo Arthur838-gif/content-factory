@@ -1,12 +1,13 @@
-"""提示词模板管理接口（P3 / M4 人工热更新入口）。"""
+"""提示词模板管理接口（P3 / M4 人工热更新入口）+ 模板效果分报表（P4）。"""
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 
 from ..db import session_scope
 from ..models import Prompt
+from ..services import scoring
 
 router = APIRouter(prefix="/api", tags=["prompts"])
 
@@ -26,11 +27,11 @@ def _prompt_dict(prompt: Prompt) -> dict:
 
 
 class PromptCreate(BaseModel):
-    platform: str
-    scenario: str
-    template: str
-    name: str = ""
-    variables: list[str] = []
+    platform: str = Field(..., max_length=20)
+    scenario: str = Field(..., max_length=20)
+    template: str = Field(..., min_length=1, max_length=65_536)  # 拦误传整个文件/超大 payload
+    name: str = Field(default="", max_length=100)
+    variables: list[str] = Field(default_factory=list, max_length=50)
 
 
 class PromptUpdate(BaseModel):
@@ -68,6 +69,15 @@ def create_prompt(payload: PromptCreate) -> dict:
         session.add(prompt)
         session.flush()
         return _prompt_dict(prompt)
+
+
+@router.get("/prompts/stats")
+def stats_prompts() -> list[dict]:
+    """模板效果分（派生报表，不落字段）：按 prompt 版本聚合已发布文章互动均值。
+
+    published < PROMPT_STATS_MIN_SAMPLES 时 sufficient_samples=false，只展示。
+    """
+    return scoring.prompt_stats()
 
 
 @router.put("/prompts/{prompt_id}")

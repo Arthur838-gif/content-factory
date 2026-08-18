@@ -18,7 +18,7 @@
   <h2>模板效果分（派生报表，按版本聚合已发布文章）</h2>
   {% if prompt_stats %}<table><thead><tr><th>平台 / 场景</th><th>版本</th><th>已发布篇数</th><th>平均点赞</th><th>平均收藏</th><th>平均评论</th><th>结论</th></tr></thead><tbody>
   {% for s in prompt_stats %}<tr><td>{{ s.platform }} · {{ s.scenario }}</td><td>{{ s.version }}</td><td>{{ s.published_count }}</td><td>{{ s.avg_likes }}</td><td>{{ s.avg_collects }}</td><td>{{ s.avg_comments }}</td><td>{% if s.sufficient_samples %}样本充足，仅供参考{% else %}<span class="badge failed">样本不足</span>{% endif %}</td></tr>{% endfor %}
-  </tbody></table><p class="muted">published &lt; 10 篇时不做任何自动启停建议，只展示；系统不会自动启停模板。</p>
+  </tbody></table><p class="muted">published &lt; {{ prompt_stats_min }} 篇时不做任何自动启停建议，只展示；系统不会自动启停模板。</p>
   {% else %}<p class="muted">暂无已发布文章。</p>{% endif %}
 </div>
 

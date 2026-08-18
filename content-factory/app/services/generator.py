@@ -14,6 +14,7 @@
 """
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import TypeVar
 
@@ -199,12 +200,14 @@ def generate(
     schema_cls: type[T],
     system_msg: str,
     user_msg: str,
+    check_sensitive: bool = True,
 ) -> GenerationResult:
     """生成一篇结构化内容。
 
     mock 模式直接返回固定 JSON；真实模式最多 3 轮（1 首发 + 2 重试），重试时把上一轮
     错误信息追加进 user 消息。成文后过敏感词，命中即 failed（非重试类错误）。
     敏感词过滤对两条路径统一生效——mock 也是成文，照样过闸。
+    check_sensitive=False 仅限非发布产物（如周度拆解的模式总结），是唯一豁免口。
     """
     # ---- 取得成文（mock 或真实 LLM）----
     if config.LLM_MOCK:
@@ -212,34 +215,35 @@ def generate(
         usage = _mock_usage()
         logger.info("mock 降级生成完成（platform=%s）", platform)
     else:
-        article, usage = _real_generate(platform, schema_cls, system_msg, user_msg)
+        article, usage, gen_error = _real_generate(platform, schema_cls, system_msg, user_msg)
 
     if article is None:
         # 真实路径 3 轮仍失败：落 failed 行，usage 仍记账（已消耗的 token）
-        err = usage.pop("__error", None) or "生成失败"
-        return GenerationResult(article=None, usage=usage, error=err)
+        return GenerationResult(article=None, usage=usage, error=gen_error or "生成失败")
 
     # ---- 成文后过敏感词（命中即 failed，非重试类，SDD 8.1；两条路径统一）----
-    full_text = " ".join(str(v) for v in article.model_dump().values())
-    hits = sensitive.find_hits(full_text, platform)
-    if hits:
-        hit_str = "、".join(hits)
-        logger.warning("敏感词命中（platform=%s）：%s", platform, hit_str)
-        return GenerationResult(
-            article=article,
-            usage=usage,
-            error=f"命中敏感词：{hit_str}",
-            sensitive_hits=hits,
-        )
+    if check_sensitive:
+        full_text = " ".join(str(v) for v in article.model_dump().values())
+        hits = sensitive.find_hits(full_text, platform)
+        if hits:
+            hit_str = "、".join(hits)
+            logger.warning("敏感词命中（platform=%s）：%s", platform, hit_str)
+            return GenerationResult(
+                article=article,
+                usage=usage,
+                error=f"命中敏感词：{hit_str}",
+                sensitive_hits=hits,
+            )
 
     return GenerationResult(article=article, usage=usage, error=None)
 
 
-def _real_generate(platform, schema_cls, system_msg, user_msg) -> tuple[T | None, dict]:
-    """真实 LLM 路径：最多 3 轮（首发 + 2 重试），重试追加错误信息。返回 (article, usage)。
+def _real_generate(platform, schema_cls, system_msg, user_msg) -> tuple[T | None, dict, str | None]:
+    """真实 LLM 路径：最多 3 轮（首发 + 2 重试），重试追加错误信息。
 
-    失败时 article=None，usage 仍累计已消耗 token；失败原因挂在 usage["__error"] 上，
-    由调用方取出写进 articles.error。
+    返回 (article, usage, error)：失败时 article=None，usage 仍累计已消耗
+    token（每轮都计费），error 供调用方写 articles.error。
+    4xx（429 除外）是请求本身的问题，重试不会好——直接放弃不烧重试。
     """
     accum_usage = _empty_usage()
     last_error: str | None = None
@@ -260,11 +264,21 @@ def _real_generate(platform, schema_cls, system_msg, user_msg) -> tuple[T | None
             article = _parse_and_validate(content, schema_cls)
             last_error = None
             break  # 校验通过
-        except Exception as exc:  # httpx 错误 / JSON 错误 / 校验错误
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            last_error = f"HTTP {status_code}: {exc.response.text[:200]}"
+            if 400 <= status_code < 500 and status_code != 429:
+                logger.error(
+                    "生成失败（platform=%s，第 %d 轮，4xx 不可重试）：%s",
+                    platform, attempt, last_error,
+                )
+                break
+            logger.warning("生成第 %d 轮失败（platform=%s）：%s", attempt, platform, last_error)
+        except Exception as exc:  # 网络错误 / JSON 错误 / 校验错误
             last_error = repr(exc) if not str(exc) else str(exc)
             logger.warning("生成第 %d 轮失败（platform=%s）：%s", attempt, platform, last_error)
+        if attempt <= config.LLM_MAX_RETRIES:
+            # 固定退避：同一轮内别把重试打满，给上游一点恢复时间
+            time.sleep(config.LLM_RETRY_BACKOFF_SECONDS)
 
-    result_usage = dict(accum_usage)
-    if article is None:
-        result_usage["__error"] = last_error or "生成失败"
-    return article, result_usage
+    return article, accum_usage, last_error

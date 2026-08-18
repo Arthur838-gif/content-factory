@@ -10,3 +10,4 @@ data/*
 !data/sensitive_*.txt
 !data/fonts/
 !data/imaging_templates/
+*.log

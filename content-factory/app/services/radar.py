@@ -8,6 +8,7 @@ P-1b 增量：
 import logging
 import re
 from datetime import datetime, timedelta
+from functools import lru_cache
 
 import yaml
 from sqlalchemy import or_, select, update
@@ -41,10 +42,14 @@ def load_domains() -> dict[str, list[str]]:
     return result
 
 
-def match_domain(title: str) -> tuple[str, str] | None:
-    """返回 (领域, 命中关键词)；多领域命中取 YAML 中先声明者；未命中返回 None。"""
+def match_domain(title: str, domains: dict[str, list[str]] | None = None) -> tuple[str, str] | None:
+    """返回 (领域, 命中关键词)；多领域命中取 YAML 中先声明者；未命中返回 None。
+
+    domains 传入预载的领域表（批量采集时整轮只读一次 data/domains.yml）；
+    缺省现读（单条入口，如人工喂样本）。
+    """
     text = title.lower()
-    for domain, keywords in load_domains().items():
+    for domain, keywords in (domains if domains is not None else load_domains()).items():
         for keyword in keywords:
             if keyword.lower() in text:
                 return domain, keyword
@@ -64,6 +69,24 @@ def tokenize(text: str) -> set[str]:
             tokens.update(run[i : i + 2] for i in range(len(run) - 1))
     tokens.update(_LATIN_WORD.findall(text.lower()))
     return tokens
+
+
+@lru_cache(maxsize=4096)
+def _tokens_cached(text: str) -> frozenset[str]:
+    return frozenset(tokenize(text))
+
+
+def query_viral_samples(session, domain: str | None = None):
+    """ViralSample × HotItem 联表（viral_score 倒序）——样本 API / 管理页 /
+    校准视图三处共用同一查询形状；domain 过滤可选。调用方自行 limit。"""
+    stmt = (
+        select(ViralSample, HotItem)
+        .join(HotItem, ViralSample.hot_item_id == HotItem.id)
+        .order_by(ViralSample.viral_score.desc(), ViralSample.id.desc())
+    )
+    if domain:
+        stmt = stmt.where(ViralSample.domain == domain)
+    return stmt
 
 
 def jaccard(a: set[str], b: set[str]) -> float:
@@ -199,7 +222,8 @@ def create_or_merge_topic(
     best: Topic | None = None
     best_sim = 0.0
     for candidate in candidates:
-        sim = jaccard(new_tokens, tokenize(candidate.title))
+        # 一轮采集里每条新条目都要对全部候选算 Jaccard，候选标题重复分词是平方级浪费
+        sim = jaccard(new_tokens, _tokens_cached(candidate.title))
         if sim > best_sim:
             best, best_sim = candidate, sim
 
@@ -207,11 +231,17 @@ def create_or_merge_topic(
     score = radar_score(item) if score is None else score
 
     if best is not None and best_sim >= config.TOPIC_JACCARD_THRESHOLD:
+        merged_score = max(best.score or 0.0, score)
         # 必须构造全新容器：JSON 列的旧值若被原地改写，flush 时新旧相等不会发 UPDATE
         evidence = dict(best.evidence or {})
         evidence["items"] = list(evidence.get("items", [])) + [snapshot]
+        if "base_score" in evidence:
+            # P4 recompute 已把基线快照进 evidence：撞题合并抬高 score 时同步抬高快照，
+            # 否则下次全量重算会把合并进来的分数打回旧基线（score 单调不降契约被破坏）。
+            # 旧值可能含效果分，取 max 属保守合并（宁可偏高不回退）。
+            evidence["base_score"] = max(evidence["base_score"], merged_score)
         best.evidence = evidence
-        best.score = max(best.score or 0.0, score)
+        best.score = merged_score
         logger.info("撞题合并进 topic #%s（重叠度 %.2f）：%s", best.id, best_sim, item.title)
         return "merged", best
 
@@ -243,12 +273,25 @@ def archive_expired_topics(session) -> int:
 
 
 def cleanup_hot_items(session) -> int:
-    """hot_items 只保留 90 天（第 5 章，周清理任务物理删除）。"""
+    """hot_items 只保留 90 天（第 5 章，周清理任务物理删除）。
+
+    被 viral_samples 引用的行跳过不删：viral_samples 永久保留且 hot_item_id 为
+    非空外键（PRAGMA foreign_keys=ON），强删会 IntegrityError 回滚整轮清理。
+    被引用的 hot_item 随样本一起保留，是两契约冲突下唯一无损解。
+    """
     cutoff = datetime.now() - timedelta(days=config.HOT_ITEMS_RETENTION_DAYS)
+    referenced = set(session.scalars(select(ViralSample.hot_item_id)).all())
     rows = session.query(HotItem).filter(HotItem.captured_at < cutoff).all()
+    removed = 0
     for row in rows:
+        if row.id in referenced:
+            continue
         session.delete(row)
-    return len(rows)
+        removed += 1
+    skipped = len(rows) - removed
+    if skipped:
+        logger.info("跳过 %s 条被 viral_samples 引用的 hot_items（样本永久保留）", skipped)
+    return removed
 
 
 # ---- 周度 LLM 拆解（P-1b，附录 A3；唯一允许调 LLM 的雷达链路）----
@@ -317,7 +360,9 @@ def run_weekly_teardown(db_path=None) -> dict:
                 "samples": digest,
             },
         )
-        result = generator.generate("xhs", ViralTeardown, system_msg, user_msg)
+        # 拆解产物是模式总结而非可发布文案，引用的爆款原文可能带平台敏感词
+        # （词表面向成文闸门），故豁免成文敏感词检查（唯一豁免点，见 SDD 8.1）
+        result = generator.generate("xhs", ViralTeardown, system_msg, user_msg, check_sensitive=False)
         if result.article is None:
             raise RuntimeError(f"周度拆解生成失败：{result.error}")
         teardown = result.article

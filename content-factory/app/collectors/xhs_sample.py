@@ -16,6 +16,7 @@ import httpx
 
 from .. import config
 from ..schemas import HotItem
+from ..services import radar
 from .base import BaseCollector, register_collector
 
 logger = logging.getLogger(__name__)
@@ -220,16 +221,9 @@ class XhsSampleCollector(BaseCollector):
         if config.XHS_SAMPLE_KEYWORDS:
             return list(config.XHS_SAMPLE_KEYWORDS)
         keywords: list[str] = []
-        for domain_keywords in _domain_keywords().values():
+        for domain_keywords in radar.load_domains().values():
             keywords.extend(domain_keywords)
         return keywords[: config.XHS_SAMPLE_MAX_QUERIES]
-
-
-def _domain_keywords() -> dict[str, list[str]]:
-    # 延迟导入避免 collectors.base ← radar 的导入环
-    from ..services import radar
-
-    return radar.load_domains()
 
 
 def main(argv: list[str]) -> int:

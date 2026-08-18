@@ -21,7 +21,9 @@ def get_engine(db_path: str | Path | None = None):
         path.parent.mkdir(parents=True, exist_ok=True)
         engine = create_engine(
             f"sqlite:///{path}",
-            connect_args={"check_same_thread": False},
+            # timeout = SQLite busy timeout（秒）：调度线程与 API 并发写时，
+            # 写锁竞争短暂等待重试而不是立刻抛 "database is locked"
+            connect_args={"check_same_thread": False, "timeout": 30},
         )
 
         @event.listens_for(engine, "connect")

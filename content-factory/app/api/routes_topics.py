@@ -27,10 +27,15 @@ router = APIRouter(prefix="/api", tags=["topics"])
 
 
 @router.get("/topics")
-def list_topics() -> list[dict]:
+def list_topics(
+    limit: int = Query(200, ge=1, le=1000, description="分页上限，防全表膨胀拖垮响应"),
+    offset: int = Query(0, ge=0),
+) -> list[dict]:
     """选题列表，按 score 倒序（P4：回填驱动的评分即时体现在排序上）。"""
     with session_scope() as session:
-        topics = session.scalars(select(Topic).order_by(desc(Topic.score), desc(Topic.id))).all()
+        topics = session.scalars(
+            select(Topic).order_by(desc(Topic.score), desc(Topic.id)).limit(limit).offset(offset)
+        ).all()
         return [
             {
                 "id": t.id,
@@ -169,8 +174,6 @@ def generate(
             raise HTTPException(status_code=500, detail=f"模板渲染失败：{exc}") from exc
         prompt_id_resolved = prompt.id
         prompt_version_resolved = prompt.version
-        # 拷贝出纯文本，避免 ORM 对象跨 session
-        system_msg, user_msg = system_msg, user_msg
 
     # 2) 调 LLM / 走 mock（事务外，慢速外部 IO 不占事务）
     result = generator.generate(platform, schema_cls, system_msg, user_msg)
@@ -235,7 +238,8 @@ def generate(
                 xhs_adapter.render_assets(
                     session,
                     article_id,
-                    cover_note=meta.get("cover_note") or "",
+                    # cover_text 为空时兜底用标题，保证素材包首图恒为 01_cover（SDD 6.3）
+                    cover_note=meta.get("cover_note") or title,
                     image_plan=meta.get("image_plan") or [],
                     footer_text=variables.get("domain") or "",
                 )

@@ -17,6 +17,12 @@ from .base import BaseCollector, failure_tracker, register_collector
 
 logger = logging.getLogger(__name__)
 
+# 进程内共享连接（本模块仅同步低频调用；免得每源每轮新建 TCP 连接）
+_http = httpx.Client(
+    timeout=config.HTTP_TIMEOUT_SECONDS,
+    headers={"User-Agent": "content-factory/0.1"},
+)
+
 
 def _local_naive(value: str | None) -> datetime | None:
     if not value:
@@ -42,7 +48,16 @@ def _child_text(item: ET.Element, name: str) -> str:
 
 
 def parse_rss(xml_text: str, source: str, author: str) -> list[HotItem]:
-    """RSS 2.0 → HotItem 列表。rank（榜单位次）记入 raw。"""
+    """RSS 2.0 → HotItem 列表。rank（榜单位次）记入 raw。
+
+    解析前做体积与 DTD/实体拒绝：xml.etree 无实体展开防护（billion-laughs 风险），
+    正常 RSSHub 输出既不带 DOCTYPE 也不会超兆级体积。
+    """
+    if len(xml_text) > config.RSS_MAX_XML_CHARS:
+        raise ValueError(f"RSS 报文超限（{len(xml_text)} > {config.RSS_MAX_XML_CHARS} 字符）")
+    lowered = xml_text.lower()
+    if "<!doctype" in lowered or "<!entity" in lowered:
+        raise ValueError("RSS 报文含 DTD/实体声明，拒绝解析")
     root = ET.fromstring(xml_text)
     items: list[HotItem] = []
     rank = 0
@@ -76,6 +91,7 @@ class HotboardCollector(BaseCollector):
 
     def fetch(self) -> list[HotItem]:
         items: list[HotItem] = []
+        failures = 0
         for source_name, spec in config.HOTBOARD_SOURCES.items():
             key = f"{self.name}:{source_name}"
             try:
@@ -88,18 +104,19 @@ class HotboardCollector(BaseCollector):
                 logger.info("热榜源 %s 拉取 %s 条", source_name, len(parsed))
             except Exception as exc:
                 # 单源失败只记日志不影响其他源；连续失败由 tracker 外发告警
+                failures += 1
                 logger.warning("热榜源 %s 拉取失败：%r", source_name, exc)
                 failure_tracker.track_failure(key, f"{source_name}: {exc!r}")
+        if failures and failures == len(config.HOTBOARD_SOURCES):
+            # 全部源失败 = 采集器整体不可用（如 RSSHub 实例挂了）。
+            # 吞掉异常会让 run_collector 记 success，熔断器永远不触发。
+            raise RuntimeError(f"热榜全部 {failures} 个源拉取失败")
         return items
 
     def _fetch_source(self, source_name: str, route: str) -> str:
         if config.RSSHUB_BASE_URL.startswith("file://"):
             fixture = Path(config.RSSHUB_BASE_URL[len("file://"):]) / f"{source_name}.xml"
             return fixture.read_text(encoding="utf-8")
-        resp = httpx.get(
-            config.RSSHUB_BASE_URL + route,
-            timeout=config.HTTP_TIMEOUT_SECONDS,
-            headers={"User-Agent": "content-factory/0.1"},
-        )
+        resp = _http.get(config.RSSHUB_BASE_URL + route)
         resp.raise_for_status()
         return resp.text

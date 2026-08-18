@@ -1,4 +1,7 @@
-"""P4 数据飞轮报表接口：成本、模板效果分、阈值校准视图（全为确定性计算）。"""
+"""P4 数据飞轮报表接口：成本与阈值校准视图（全为确定性计算）。
+
+模板效果分 (/api/prompts/stats) 按资源归属放在 routes_prompts.py。
+"""
 from fastapi import APIRouter, HTTPException, Query
 
 from ..services import scoring
@@ -14,9 +17,10 @@ def stats_cost(
 
     估算口径：cost_est 按配置单价折算，单价未按当前供应商修正前不作账单依据。
     """
-    if month is not None and (len(month) != 7 or month[4] != "-"):
-        raise HTTPException(status_code=422, detail="month 格式应为 YYYY-MM")
-    return scoring.cost_report(month)
+    target = scoring.normalize_month(month)
+    if target is None:
+        raise HTTPException(status_code=422, detail="month 格式应为真实月份 YYYY-MM")
+    return scoring.cost_report(target)
 
 
 @router.get("/stats/cost/article/{article_id}")
@@ -26,15 +30,6 @@ def stats_article_cost(article_id: int) -> dict:
     if result is None:
         raise HTTPException(status_code=404, detail=f"article {article_id} 不存在")
     return result
-
-
-@router.get("/prompts/stats")
-def stats_prompts() -> list[dict]:
-    """模板效果分（派生报表，不落字段）：按 prompt 版本聚合已发布文章互动均值。
-
-    published < PROMPT_STATS_MIN_SAMPLES 时 sufficient_samples=false，只展示。
-    """
-    return scoring.prompt_stats()
 
 
 @router.get("/stats/threshold-calibration")

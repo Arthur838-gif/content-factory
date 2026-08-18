@@ -28,6 +28,7 @@ DATA_DIR = Path(os.environ.get("CF_DATA_DIR", str(PROJECT_ROOT / "data")))
 DB_PATH = Path(os.environ.get("CF_DB_PATH", str(DATA_DIR / "app.db")))
 BACKUP_DIR = Path(os.environ.get("CF_BACKUP_DIR", str(DATA_DIR / "backups")))
 DOMAINS_FILE = Path(os.environ.get("CF_DOMAINS_FILE", str(DATA_DIR / "domains.yml")))
+TEMPLATES_DIR = Path(os.environ.get("CF_TEMPLATES_DIR", str(PROJECT_ROOT / "app" / "templates")))
 
 # ---- 热榜采集（M1）----
 # RSSHub 基地址。自建实例替换之；离线调试可指向本地 RSS fixture 目录，
@@ -39,14 +40,18 @@ HOTBOARD_SOURCES: dict[str, dict[str, str]] = {
     "baidu": {"route": "/baidu/topwords", "label": "百度热搜"},
 }
 HTTP_TIMEOUT_SECONDS = 15
+# RSS 报文体积上限（字符）：xml.etree 无实体展开防护，超限/DTD 报文直接拒绝
+RSS_MAX_XML_CHARS = 2_000_000
 
-# ---- 低粉爆款三阈值（第 6.2 节初版；环境变量可热改，TODO(confirm)：P4 用回填数据校准后固化）----
+# ---- 低粉爆款三阈值（第 6.2 节初版；环境变量可热改；P4 起按回填数据校准，
+# 校准结论记录在 docs/p4-calibration.md，改值即改该文档）----
 VIRAL_FANS_MAX = int(os.environ.get("CF_VIRAL_FANS_MAX", "5000"))
 VIRAL_LIKES_MIN = int(os.environ.get("CF_VIRAL_LIKES_MIN", "500"))  # 自动采样候选预筛；人工样本不做该预筛
 VIRAL_SCORE_MIN = float(os.environ.get("CF_VIRAL_SCORE_MIN", "2.0"))
 
 # ---- 选题雷达（部分 M3，P-1a）----
-TOPIC_JACCARD_THRESHOLD = float(os.environ.get("CF_TOPIC_DUPLICATE_JACCARD", "0.5"))  # 撞题阈值，初值待 P4 校准
+# 撞题阈值初值；P4 起按回填数据校准，结论记录在 docs/p4-calibration.md
+TOPIC_JACCARD_THRESHOLD = float(os.environ.get("CF_TOPIC_DUPLICATE_JACCARD", "0.5"))
 TOPIC_DEDUP_WINDOW_DAYS = 7  # 撞题回看窗口
 TOPIC_TTL_HOURS = 72  # radar 选题保鲜：created_at + 72h
 
@@ -94,6 +99,7 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-chat")
 LLM_MAX_TOKENS = int(os.environ.get("CF_LLM_MAX_TOKENS", "4096"))
 LLM_TIMEOUT_SECONDS = int(os.environ.get("CF_LLM_TIMEOUT_SECONDS", "60"))
 LLM_MAX_RETRIES = 2  # 重试封顶 2 次（1 次首发 + 2 次重试 = 最多 3 轮）
+LLM_RETRY_BACKOFF_SECONDS = float(os.environ.get("CF_LLM_RETRY_BACKOFF_SECONDS", "2"))  # 重试间隔（固定退避）
 # 单价（美元 / 每百万 token），用于 meta.usage.cost_est 估算；换供应商时改这里。
 # ⚠️ P4 成本报表口径：当前默认为 DeepSeek 单价，切 GLM 后必须用
 # CF_LLM_PRICE_INPUT / CF_LLM_PRICE_OUTPUT 按官方价修正，否则报表只能作"估算口径"。

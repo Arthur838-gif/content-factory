@@ -1,0 +1,23 @@
+[project]
+name = "content-factory"
+version = "0.1.0"
+description = "双端内容工厂：公众号 + 小红书选题/生成/出图/发布回填流水线"
+requires-python = ">=3.10"
+
+# 依赖仍以 requirements.txt 为准（依赖克制：不因工程化配置引入新包）；
+# 本文件只为承载 lint 配置，与打包无关。
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [".venv", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # 长行由人工把控（中文注释与模板字符串常见超长，强折行伤可读性）
+    "B008",  # FastAPI Query/Depends 默认值模式依赖函数调用作默认参数
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]

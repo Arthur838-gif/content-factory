@@ -76,14 +76,15 @@ class ManualSampleInput(BaseModel):
     录入后与自动样本走完全相同的打分、落库、撞题与建题管线。
     """
 
-    url: str = Field(..., description="笔记链接，http(s) 开头")
-    title: str = Field(..., min_length=1, description="笔记标题")
-    author: str = Field(..., min_length=1, description="作者昵称")
-    fans: int = Field(..., ge=0, description="粉丝数")
-    likes: int = Field(..., ge=0, description="点赞数")
-    collects: int = Field(..., ge=0, description="收藏数")
-    comments: int = Field(..., ge=0, description="评论数")
-    domain: str = Field(..., description="领域，须为 data/domains.yml 中的领域名")
+    url: str = Field(..., max_length=1000, description="笔记链接，http(s) 开头")
+    title: str = Field(..., min_length=1, max_length=200, description="笔记标题")
+    author: str = Field(..., min_length=1, max_length=100, description="作者昵称")
+    # 上限 10^9：拦脏数据/溢出值，正常互动量纲远够用
+    fans: int = Field(..., ge=0, le=10**9, description="粉丝数")
+    likes: int = Field(..., ge=0, le=10**9, description="点赞数")
+    collects: int = Field(..., ge=0, le=10**9, description="收藏数")
+    comments: int = Field(..., ge=0, le=10**9, description="评论数")
+    domain: str = Field(..., max_length=50, description="领域，须为 data/domains.yml 中的领域名")
 
     @field_validator("url")
     @classmethod
