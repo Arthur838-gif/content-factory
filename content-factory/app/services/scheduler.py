@@ -3,7 +3,8 @@
 任务一览：
   hotboard   每小时采集一次热榜（M1）
   expire     每小时把到期且仍为 new 的选题置为 archived（第 5 章）
-  xhs_sample 每 6 小时小红书只读采样（M2，P-1b；熔断后自动跳过）
+  xhs_sample 默认不排程（RedFox 按调用计费，采样在 /viral 页手动触发；
+             CF_XHS_SAMPLE_SCHEDULED=true 恢复每 6 小时采样；熔断后自动跳过）
   teardown   每周一 06:00 低粉爆款周度 LLM 拆解（A3，P-1b）
   backup     每日 03:00 备份 SQLite → data/backups/app_YYYYMMDD.db，保留 7 份
   cleanup    每周日 05:00 物理删除 90 天前的 hot_items（与备份错开 ≥ 1 小时）
@@ -123,11 +124,15 @@ def create_scheduler() -> BackgroundScheduler:
         job_expire_topics, "interval", hours=1, id="expire_topics",
         coalesce=True, max_instances=1,
     )
-    # xhs 采样不随启动立即执行（mcp 未部署时避免启动即连败熔断）；熔断后由 job 内跳过
-    scheduler.add_job(
-        job_xhs_sample, "interval", hours=config.XHS_SAMPLE_INTERVAL_HOURS, id="xhs_sample",
-        coalesce=True, max_instances=1,
-    )
+    # xhs 采样默认不排程（RedFox 计费，走 /viral 页手动触发）；
+    # 排程时也不随启动立即执行（mcp 未部署时避免启动即连败熔断）
+    if config.XHS_SAMPLE_SCHEDULED:
+        scheduler.add_job(
+            job_xhs_sample, "interval", hours=config.XHS_SAMPLE_INTERVAL_HOURS, id="xhs_sample",
+            coalesce=True, max_instances=1,
+        )
+    else:
+        logger.info("xhs_sample 定时采样未启用（CF_XHS_SAMPLE_SCHEDULED 未开），仅手动触发")
     scheduler.add_job(
         job_xhs_teardown, "cron", day_of_week=config.XHS_TEARDOWN_WEEKDAY,
         hour=config.XHS_TEARDOWN_HOUR, minute=0, id="xhs_teardown", coalesce=True,

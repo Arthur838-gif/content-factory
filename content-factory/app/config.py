@@ -82,6 +82,9 @@ XHS_MCP_TIMEOUT_SECONDS = int(os.environ.get("CF_XHS_MCP_TIMEOUT", "30"))
 XHS_SAMPLE_KEYWORDS = [k.strip() for k in os.environ.get("CF_XHS_SAMPLE_KEYWORDS", "").split(",") if k.strip()]
 XHS_SAMPLE_MAX_QUERIES = int(os.environ.get("CF_XHS_SAMPLE_MAX_QUERIES", "20"))
 XHS_SAMPLE_INTERVAL_HOURS = int(os.environ.get("CF_XHS_SAMPLE_INTERVAL_HOURS", "6"))
+# 定时采样默认关闭（RedFox 按调用计费，采样改为 /viral 页手动触发；
+# 要恢复定时在 .env 加 CF_XHS_SAMPLE_SCHEDULED=true）
+XHS_SAMPLE_SCHEDULED = os.environ.get("CF_XHS_SAMPLE_SCHEDULED", "false").strip().lower() in ("1", "true", "yes")
 # GitHub 开源项目采集（P7：合集栏目的真实工具素材；未鉴权 10 次/分钟）
 # 时效优先：只收"最近新建却已攒星"的新锐项目（sort=stars 在 created 窗口内
 # 即涨星最快），避免 AutoGPT 这类老牌项目长期霸榜
