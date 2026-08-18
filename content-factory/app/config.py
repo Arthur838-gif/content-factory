@@ -104,8 +104,9 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-chat")
 
 # 成本与超时控制（第 6.4 / 8.3 节，超时值集中在此，建议 60s 可热改）
-LLM_MAX_TOKENS = int(os.environ.get("CF_LLM_MAX_TOKENS", "4096"))
-LLM_TIMEOUT_SECONDS = int(os.environ.get("CF_LLM_TIMEOUT_SECONDS", "60"))
+# 思维链模型（glm-4.x）思考与正文共享 max_tokens，给足余量防正文被截空
+LLM_MAX_TOKENS = int(os.environ.get("CF_LLM_MAX_TOKENS", "8192"))
+LLM_TIMEOUT_SECONDS = int(os.environ.get("CF_LLM_TIMEOUT_SECONDS", "120"))
 LLM_MAX_RETRIES = 2  # 重试封顶 2 次（1 次首发 + 2 次重试 = 最多 3 轮）
 LLM_RETRY_BACKOFF_SECONDS = float(os.environ.get("CF_LLM_RETRY_BACKOFF_SECONDS", "2"))  # 重试间隔（固定退避）
 # 单价（美元 / 每百万 token），用于 meta.usage.cost_est 估算；换供应商时改这里。

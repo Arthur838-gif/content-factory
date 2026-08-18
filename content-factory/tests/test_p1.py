@@ -211,6 +211,19 @@ def main() -> int:
     check("无标签时不追加空行", xhs_adapter.format_note(
         note.model_copy(update={"tags": []})).content == "第一段\n\n第二段")
 
+    print("\n[9] JSON 解析容错（思维链模型常见输出形态，不调 LLM）")
+    good = '{"title": "t", "content": "c", "tags": [], "cover_text": "", "image_quotes": []}'
+    fenced = "```json\n" + good + "\n```"
+    wrapped = "好的，以下是 JSON：\n" + good + "\n如上。"
+    for tag, raw in [("裸 JSON", good), ("markdown 围栏", fenced), ("前后夹说明文字", wrapped)]:
+        parsed = generator._parse_and_validate(raw, XhsNote)
+        check(f"{tag} 可解析", parsed.title == "t", tag)
+    try:
+        generator._parse_and_validate("", XhsNote)
+        check("空串报错并带原文开头", False)
+    except ValueError as exc:
+        check("空串报错并带原文开头", "不是合法 JSON" in str(exc) and "原文开头" in str(exc), str(exc)[:80])
+
     print("\n" + "=" * 46)
     if FAILURES:
         print(f"FAIL：{len(FAILURES)} 项未通过 -> {FAILURES}")

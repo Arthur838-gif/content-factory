@@ -14,6 +14,7 @@
 """
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TypeVar
@@ -189,17 +190,38 @@ def _call_llm(system_msg: str, user_msg: str) -> tuple[str, dict]:
         resp = client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
         data = resp.json()
-    content = data["choices"][0]["message"]["content"]
+    choice = data["choices"][0]
+    content = choice["message"].get("content") or ""
+    if choice.get("finish_reason") == "length" or not content.strip():
+        # 思维链模型（glm-4.x）思考与正文共享 max_tokens：思考过长会吃光预算，
+        # 正文为空串或半截 JSON——明确报因，交给重试逻辑提示模型精简
+        raise ValueError(
+            f"LLM 输出被截断或为空（finish_reason={choice.get('finish_reason')}，"
+            f"max_tokens={config.LLM_MAX_TOKENS}，思维链与正文共享此额度）"
+        )
     usage = _usage_from_response(data.get("usage") or {})
     return content, usage
 
 
 def _parse_and_validate(content: str, schema_cls: type[T]) -> T:
-    """JSON 解析 + Pydantic 校验；失败抛 ValueError 供重试逻辑捕获。"""
+    """JSON 解析 + Pydantic 校验；失败抛 ValueError 供重试逻辑捕获。
+
+    容错两层：剥 markdown 围栏（```json ... ```）；截取最外层 {…}
+    （模型偶尔在 JSON 前后夹说明文字）。错误信息带原文开头便于定位。
+    """
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    if not text.startswith("{"):
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            text = text[start:end + 1]
     try:
-        obj = json.loads(content)
+        obj = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"LLM 返回不是合法 JSON：{exc}") from exc
+        head = repr(text[:120])
+        raise ValueError(f"LLM 返回不是合法 JSON：{exc}；原文开头 {head}") from exc
     try:
         return schema_cls.model_validate(obj)
     except ValidationError as exc:
