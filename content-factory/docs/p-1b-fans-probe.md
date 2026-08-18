@@ -30,6 +30,20 @@
 结构验收用 mock/录制响应 + 人工喂样本完成；真实环境部署 mcp 后重跑
 上述探针命令，把结论更新到本文件即可，代码无需改动。
 
+## RedFox 双源结论（2026-08-18 晚，真实 Key 实测）
+
+`python -m app.collectors.redfox probe "AI工具"` → **50 条笔记、50 条带 authorFans，
+`fans_available: true`**。洞察接口（`/story/api/xhs/search/search`）响应与文档
+一致（顶层裸给、无 code 包装），字段映射按 `tests/test_redfox.py` 固化。
+
+真实采样一轮（`CF_XHS_SAMPLE_KEYWORDS=AI工具`）：fetched=50 → inserted=50 →
+**viral_created=3、topics_created=3**（fans 662–4061、likes ~2000，
+viral_score 2.49–9.81）。低粉爆款引擎首次端到端跑通，不再依赖 mcp 登录态。
+
+采样优先级（`xhs_sample` 双源）：RedFox（配 Key）→ 无 Key / 调用失败降级
+xiaohongshu-mcp（其 search_feeds 仍无 fans，走人工喂样本降级模式）。
+`probe` 测 RedFox；`probe-mcp` 测 mcp。
+
 ## 纪律提醒
 
 - 探针与采样只允许只读接口（search_notes）；禁止关注、点赞、评论、

@@ -1,0 +1,66 @@
+{% extends "base.html" %}{% block title %}内容栏目 · 内容工厂{% endblock %}
+{% block content %}<h1>内容栏目 <span class="muted">（{{ week_range}} 本周）</span></h1>
+<p class="muted">栏目 = 可持续系列：固定名称 + 固定角度结构 + 每周期数 + 专属采样关键词。点「生成本周计划」按节奏从当周采样素材派生选题（进选题台，source=pillar）。</p>
+{% if pillars %}<div class="card"><table><thead><tr><th>栏目</th><th>节奏</th><th>本周已排</th><th>关键词池</th><th>状态</th><th>操作</th></tr></thead><tbody>
+{% for p in pillars %}<tr>
+<td><strong>{{ p.name }}</strong><br><span class="muted">{{ p.angle[:60] }}{% if p.angle|length > 60 %}…{% endif %}</span></td>
+<td>{% if p.slots_per_week == 1 %}周更固定档{% else %}每周 {{ p.slots_per_week }} 期{% endif %}</td>
+<td><a href="/#pillar-topics">{{ planned.get(p.id, 0) }} 期 →</a></td>
+<td>{% for kw in (p.keywords or []) %}<span class="badge">{{ kw }}</span> {% endfor %}</td>
+<td><span class="badge {{ 'ready' if p.active else 'archived' }}">{{ '启用' if p.active else '停用' }}</span></td>
+<td><div class="actions">
+<button class="secondary" onclick="togglePillar({{ p.id }}, {{ 'false' if p.active else 'true' }}, this)">{{ '停用' if p.active else '启用' }}</button>
+{% if not planned.get(p.id) %}<button class="secondary" onclick="delPillar({{ p.id }}, this)">删除</button>{% endif %}
+</div></td></tr>{% endfor %}
+</tbody></table>
+<p><button onclick="planWeek(this)">生成本周计划（全部启用栏目）</button> <span class="muted">幂等：已排满的栏目自动跳过</span></p></div>
+{% else %}<div class="card muted">暂无栏目，先在下面建一个。</div>{% endif %}
+<div class="card"><h2>新建栏目</h2>
+<form id="pillar-form">
+<label>栏目名称（如：本周5个值得装的AI工具）</label><input name="name" required>
+<label>固定角度 / 结构说明（每期复用，喂生成提示词）</label><textarea name="angle" rows="3"></textarea>
+<label>关联领域（标签候选用，如：AI与编程）</label><input name="domain" value="AI与编程">
+<label>每周期数（1=周更固定档，2-7=多期轮换）</label><input name="slots_per_week" type="number" min="1" max="7" value="1">
+<label>采样关键词池（逗号分隔）</label><input name="keywords" placeholder="AI工具,AIGC">
+<p><button>创建栏目</button></p>
+</form></div>
+<script>
+function _payload() {
+  const f = new FormData(document.getElementById('pillar-form'));
+  return {
+    name: f.get('name').trim(), angle: f.get('angle').trim(), domain: f.get('domain').trim(),
+    slots_per_week: Number(f.get('slots_per_week') || 1),
+    keywords: (f.get('keywords') || '').split(/[,，]/).map(s => s.trim()).filter(Boolean),
+    active: true,
+  };
+}
+document.getElementById('pillar-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const r = await fetch('/api/pillars', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(_payload())});
+  if (r.ok) location.reload(); else alert((await r.json()).detail || '创建失败');
+});
+async function togglePillar(id, active, btn) {
+  const list = await (await fetch('/api/pillars')).json();
+  const p = list.find(x => x.id === id);
+  if (!p) return;
+  const r = await fetch(`/api/pillars/${id}`, {method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({...p, active})});
+  if (r.ok) location.reload(); else alert((await r.json()).detail || '操作失败');
+}
+async function delPillar(id, btn) {
+  if (!confirm('确认删除该栏目？')) return;
+  const r = await fetch(`/api/pillars/${id}`, {method: 'DELETE'});
+  if (r.ok) location.reload(); else alert((await r.json()).detail || '删除失败');
+}
+async function planWeek(btn) {
+  btn.disabled = true; btn.textContent = '排期中…';
+  try {
+    const r = await fetch('/api/pillars/plan', {method: 'POST'});
+    const d = await r.json();
+    if (!r.ok) { alert(d.detail || '排期失败'); return; }
+    const summary = d.map(x => `${x.pillar}：新增 ${x.created.length} 期`).join('；');
+    alert('本周计划：' + (summary || '无启用栏目'));
+    location.href = '/';
+  } finally { btn.disabled = false; btn.textContent = '生成本周计划（全部启用栏目）'; }
+}
+</script>{% endblock %}

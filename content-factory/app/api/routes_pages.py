@@ -8,7 +8,7 @@ from sqlalchemy import desc, select
 from .. import config
 from ..collectors import base as collectors_base
 from ..db import session_scope
-from ..models import Article, Asset, Prompt, Topic
+from ..models import Article, Asset, Pillar, Prompt, Topic
 from ..services import radar, scoring
 from .routes_prompts import _prompt_dict
 
@@ -27,16 +27,99 @@ def _article_view(session, article: Article) -> dict:
 
 @router.get("/")
 def topics_page(request: Request):
+    """工作台（P5 改版）：本周栏目排期为主线，一次性灵感选题为备选池。
+
+    数据分两组：pillar 排期选题（本周，按栏目分组）与 radar/manual 灵感选题
+    （按 score 倒序）；顶部给每栏目本周进度（已排/已生成/已发布）与采样器状态。
+    """
+    from datetime import datetime
+
+    from ..models import CollectorState, Pillar
+    from ..services import pillar as pillar_service
+
     with session_scope() as session:
         topics = session.scalars(select(Topic).order_by(desc(Topic.score), desc(Topic.id))).all()
         articles = session.scalars(select(Article).order_by(desc(Article.created_at), desc(Article.id))).all()
         by_topic: dict[int, dict[str, Article]] = {}
         for article in articles:
             by_topic.setdefault(article.topic_id, {}).setdefault(article.platform, article)
+        pillars = session.scalars(select(Pillar).order_by(Pillar.id)).all()
+        pillar_map = {p.id: p for p in pillars}
+        week_start, week_end = pillar_service.week_bounds()
+
+        pillar_topics = [
+            t for t in topics
+            if t.source == "pillar" and t.created_at >= week_start
+        ]
+        # 过期未用的 pillar 选题（上周遗留）单独归入灵感池底部，不混进本周排期
+        stale_pillar = [t for t in topics if t.source == "pillar" and t.created_at < week_start]
+        idea_topics = [t for t in topics if t.source != "pillar"] + stale_pillar
+
+        grouped: list[tuple[Pillar, list[Topic]]] = []
+        for p in pillars:
+            ts = [t for t in pillar_topics if (t.evidence or {}).get("pillar_id") == p.id]
+            grouped.append((p, ts))
+        # evidence 指向已删除栏目的排期选题（罕见）也保留展示
+        known_pids = set(pillar_map)
+        orphan = [t for t in pillar_topics if (t.evidence or {}).get("pillar_id") not in known_pids]
+        if orphan:
+            grouped.append((None, orphan))
+
+        progress = []
+        for p in pillars:
+            ts = [t for t in pillar_topics if (t.evidence or {}).get("pillar_id") == p.id]
+            generated = sum(1 for t in ts if by_topic.get(t.id))
+            published = sum(
+                1 for t in ts
+                if any(a.status == "published" for a in by_topic.get(t.id, {}).values())
+            )
+            progress.append(
+                {"pillar": p, "planned": len(ts), "slots": p.slots_per_week,
+                 "generated": generated, "published": published}
+            )
+
+        collector = session.scalars(
+            select(CollectorState).where(CollectorState.name == "xhs_sample")
+        ).first()
     return templates.TemplateResponse(
         request=request,
         name="topics.html",
-        context={"topics": topics, "latest": by_topic},
+        context={
+            "topics": topics,
+            "latest": by_topic,
+            "grouped": grouped,
+            "idea_topics": idea_topics,
+            "progress": progress,
+            "collector": collector,
+            "now": datetime.now(),
+            "week_range": f"{week_start.strftime('%m.%d')}–{week_end.strftime('%m.%d')}",
+        },
+    )
+
+
+@router.get("/pillars")
+def pillars_page(request: Request):
+    """栏目管理页（P5）：列表 + 建栏目表单 + 生成本周计划。"""
+    from ..services import pillar as pillar_service
+
+    with session_scope() as session:
+        pillars = session.scalars(select(Pillar).order_by(Pillar.id)).all()
+        week_start, week_end = pillar_service.week_bounds()
+        planned: dict[int, int] = {}
+        for topic in session.scalars(
+            select(Topic).where(Topic.source == "pillar", Topic.created_at >= week_start)
+        ).all():
+            pid = (topic.evidence or {}).get("pillar_id")
+            if pid is not None:
+                planned[pid] = planned.get(pid, 0) + 1
+    return templates.TemplateResponse(
+        request=request,
+        name="pillars.html",
+        context={
+            "pillars": pillars,
+            "planned": planned,
+            "week_range": f"{week_start.strftime('%m.%d')}–{week_end.strftime('%m.%d')}",
+        },
     )
 
 

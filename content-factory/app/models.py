@@ -167,6 +167,26 @@ class PublishRecord(Base):
     published_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class Pillar(Base):
+    """pillars：内容栏目（可持续系列，P5）。
+
+    一个栏目 = 固定名称 + 固定角度结构 + 每周期数 + 专属采样关键词池；
+    排期（services.pillar.plan_week）按周期从当周采样素材派生选题
+    （topics.source='pillar'，不参与 radar 撞题合并）。
+    """
+
+    __tablename__ = "pillars"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), comment="栏目名，如：本周5个值得装的AI工具")
+    angle: Mapped[str] = mapped_column(Text, default="", comment="固定角度/结构说明，进 topic.angle 喂生成")
+    domain: Mapped[str] = mapped_column(String(64), default="", comment="关联领域（标签候选与领域过滤用）")
+    slots_per_week: Mapped[int] = mapped_column(Integer, default=1, comment="每周期数：1=周更固定档，>1=多期轮换")
+    keywords: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="专属采样关键词池（喂 xhs_sample）")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, comment="停用后不采样不排期，历史选题保留")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class CollectorState(Base):
     """collector_state：采集器熔断状态（P-1b）。
 
@@ -195,4 +215,5 @@ ALL_MODELS = (
     TagLibrary,
     PublishRecord,
     CollectorState,
+    Pillar,
 )

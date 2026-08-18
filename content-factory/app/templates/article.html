@@ -2,7 +2,7 @@
 {% block content %}<h1>{{ article.title or '生成结果' }} <span class="badge">{{ article.platform }}</span> <span class="badge {{ article.status }}">{{ article.status }}</span></h1>
 <p class="muted">创建于 {{ article.created_at.strftime('%Y-%m-%d %H:%M') }} · 成本 {{ (article.meta or {}).get('usage',{}).get('cost_est','-') }}</p>
 {% if article.status == 'archived' %}<p class="notice">此版本已归档，仅供预览。</p>{% endif %}
-{% if article.status == 'failed' %}<div class="notice"><strong>生成失败</strong><pre>{{ article.error }}</pre><button onclick="generate({{ article.topic_id }}, '{{ article.platform }}')">重新生成</button></div>{% endif %}
+{% if article.status == 'failed' %}<div class="notice"><strong>生成失败</strong><pre>{{ article.error }}</pre><button onclick="generate({{ article.topic_id }}, '{{ article.platform }}', this)">重新生成</button></div>{% endif %}
 <div class="grid"><section>
 {% for label,id,value in [('标题','copy-title',article.title),('正文','copy-content',article.content),('标签','copy-tags',(article.tags or [])|join(' '))] %}<div class="card"><div class="field-title"><strong>{{ label }}</strong><button class="secondary" onclick="copyText('{{ id }}')">复制</button></div><pre id="{{ id }}">{{ value }}</pre></div>{% endfor %}
 {% if article.platform == 'wechat' and (article.meta or {}).get('digest') %}<div class="card"><strong>摘要</strong><pre>{{ article.meta.digest }}</pre></div>{% endif %}

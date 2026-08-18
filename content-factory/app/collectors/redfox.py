@@ -1,0 +1,200 @@
+"""RedFoxHub（红狐数据 redfox.hk）小红书只读数据源（P-1b 补位）。
+
+背景：xiaohongshu-mcp 的 search_feeds 不含作者 fans，user_profile 又会
+60s panic 触发风控；RedFox 爆款洞察接口的搜索结果自带 authorFans 与
+四项互动计数，一次调用即可进入低粉爆款判定。本模块只做只读查询。
+
+接口（见仓库外 redfox-api文档/，2026-08-18 拉取）：
+- 爆款笔记洞察 POST /story/api/xhs/search/search —— 主采样；
+- 作品内容详情 POST /story/api/xhsUser/queryWorkDetail —— 候选深挖
+  （全文 workDesc + 阅读量 workReadedCount），暂供 CLI 手动使用。
+
+鉴权：请求头 REDFOX_API_KEY（redfox.hk 密钥管理页创建），按调用计费。
+响应包装不统一：详情接口带 {code:2000,msg,data}，洞察接口示例顶层裸给
+（articles 直接在顶层），_unwrap 两种都兼容，首次联调需实测确认。
+"""
+import json
+import logging
+import re
+from datetime import date, timedelta
+
+import httpx
+
+from .. import config
+from ..schemas import HotItem
+
+logger = logging.getLogger(__name__)
+
+INSIGHT_PATH = "/story/api/xhs/search/search"
+WORK_DETAIL_PATH = "/story/api/xhsUser/queryWorkDetail"
+
+
+class RedFoxError(RuntimeError):
+    """RedFox 请求失败（网络 / 鉴权 / 业务码非 2000 / 响应形状异常）。"""
+
+
+def _to_int(value) -> int:
+    """互动数字段容错解析：int / "1234" / "1,200" / "1.2万" / "5w+" / None → int。
+
+    七日爆款榜的 "5w+" 之类模糊量级按下界取值（50000），只用于量级参考。
+    """
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip().replace(",", "")
+    match = re.search(r"([\d.]+)\s*[万wW]", text)
+    if match:
+        return int(float(match.group(1)) * 10000)
+    match = re.search(r"\d+(\.\d+)?", text)
+    return int(float(match.group())) if match else 0
+
+
+def enabled() -> bool:
+    """配置了 API Key 即启用 RedFox 优先采样（xhs_sample 双源调度用）。"""
+    return bool(config.REDFOX_API_KEY)
+
+
+def _unwrap(resp, what: str):
+    """剥 {code,msg,data} 包装；顶层裸响应原样返回。code 非 2000 抛 RedFoxError。"""
+    if not isinstance(resp, dict):
+        raise RedFoxError(f"{what} 响应非对象：{type(resp).__name__}")
+    if "code" in resp:
+        if resp.get("code") != 2000:
+            raise RedFoxError(
+                f"{what} 业务失败：code={resp.get('code')} "
+                f"msg={resp.get('msg') or resp.get('message')}"
+            )
+        return resp.get("data")
+    return resp
+
+
+def _post(path: str, payload: dict):
+    headers = {
+        "REDFOX_API_KEY": config.REDFOX_API_KEY,
+        "Content-Type": "application/json",
+    }
+    try:
+        with httpx.Client(timeout=config.REDFOX_TIMEOUT_SECONDS) as client:
+            resp = client.post(f"{config.REDFOX_BASE_URL}{path}", json=payload, headers=headers)
+    except httpx.HTTPError as exc:
+        raise RedFoxError(f"{path} 网络错误：{exc}") from exc
+    if resp.status_code in (401, 403):
+        raise RedFoxError(f"{path} 鉴权失败（HTTP {resp.status_code}）：检查 REDFOX_API_KEY 有效性与余额")
+    if resp.status_code >= 400:
+        raise RedFoxError(f"{path} HTTP {resp.status_code}：{resp.text[:200]}")
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise RedFoxError(f"{path} 响应非 JSON：{resp.text[:200]}") from exc
+
+
+def search_articles(keyword: str, days: int | None = None) -> list[dict]:
+    """爆款洞察：关键词搜索，返回 articles 原始列表。
+
+    只取 articles；latestHotArticles 是搜索结果不足时的全站推荐兜底，
+    与检索词无关，采了会污染领域过滤，一律丢弃。时间窗默认近 7 天
+    （低粉爆款只追近期数据，也压低按调用计费的单轮成本）。
+    """
+    days = config.REDFOX_WINDOW_DAYS if days is None else days
+    end = date.today()
+    payload = {
+        "keyword": keyword,
+        "pageSize": 50,
+        "startDate": (end - timedelta(days=days)).isoformat(),
+        "endDate": end.isoformat(),
+    }
+    data = _unwrap(_post(INSIGHT_PATH, payload), "爆款洞察")
+    articles = data.get("articles") if isinstance(data, dict) else None
+    if not isinstance(articles, list):
+        raise RedFoxError(f"爆款洞察响应缺少 articles 列表：{str(data)[:200]}")
+    return [a for a in articles if isinstance(a, dict)]
+
+
+def parse_articles(articles: list[dict]) -> list[HotItem]:
+    """洞察 articles → HotItem 列表（无标题条目跳过，URL 缺省按笔记 ID 构造）。"""
+    items: list[HotItem] = []
+    for article in articles:
+        title = str(article.get("title") or "").strip()
+        if not title:
+            continue
+        note_id = str(article.get("id") or "")
+        url = str(article.get("shareInfoLink") or "") or (
+            f"https://www.xiaohongshu.com/explore/{note_id}" if note_id else ""
+        )
+        items.append(
+            HotItem(
+                source="xhs",
+                title=title,
+                url=url,
+                author=str(article.get("authorNickname") or "") or None,
+                fans=_to_int(article.get("authorFans")),
+                likes=_to_int(article.get("likedCount")),
+                collects=_to_int(article.get("collectedCount")),
+                comments=_to_int(article.get("commentsCount")),
+                raw={"article": article},
+            )
+        )
+    return items
+
+
+def search_hot_items(keyword: str) -> list[HotItem]:
+    """主入口：洞察搜索 + 归一化，供 xhs_sample 优先调用。"""
+    return parse_articles(search_articles(keyword))
+
+
+def work_detail(work_id: str = "", work_link: str = "") -> dict:
+    """作品详情（优质库）：全文、精确互动计数与阅读量。work_id / work_link 二选一。"""
+    payload = {k: v for k, v in {"workId": work_id, "workLink": work_link}.items() if v}
+    if not payload:
+        raise RedFoxError("work_detail 需要 workId 或 workLink 至少一项")
+    data = _unwrap(_post(WORK_DETAIL_PATH, payload), "作品详情")
+    if not isinstance(data, dict):
+        raise RedFoxError("作品详情响应缺少 data 对象")
+    return data
+
+
+def probe(keyword: str = "AI工具") -> dict:
+    """RedFox 探针：验证 Key 可用 + 搜索结果是否真的带 fans 字段。
+
+    用法：python -m app.collectors.redfox probe [keyword]
+    """
+    items = search_hot_items(keyword)
+    fans_values = [item.fans for item in items]
+    return {
+        "source": "redfox",
+        "keyword": keyword,
+        "note_count": len(items),
+        "fans_available": any(fans > 0 for fans in fans_values),
+        "fans_found": sum(1 for fans in fans_values if fans > 0),
+        "conclusion": (
+            "RedFox 搜索结果含 authorFans：低粉爆款判定可直接跑通"
+            if any(fans > 0 for fans in fans_values)
+            else "RedFox 搜索可用但未见 fans：响应字段与文档不符，需人工核对原始报文"
+        ),
+    }
+
+
+def main(argv: list[str]) -> int:
+    if argv and argv[0] == "probe":
+        if not enabled():
+            print("未配置 REDFOX_API_KEY（.env 加 CF_REDFOX_API_KEY 或环境变量 REDFOX_API_KEY）")
+            return 2
+        print(json.dumps(probe(*argv[1:2]), ensure_ascii=False, indent=2))
+        return 0
+    if argv and argv[0] == "detail" and len(argv) > 1:
+        target = argv[1]
+        detail = work_detail(
+            work_id="" if target.startswith("http") else target,
+            work_link=target if target.startswith("http") else "",
+        )
+        print(json.dumps(detail, ensure_ascii=False, indent=2))
+        return 0
+    print("用法: python -m app.collectors.redfox probe [keyword] | detail <笔记ID或链接>")
+    return 2
+
+
+if __name__ == "__main__":
+    import sys
+
+    raise SystemExit(main(sys.argv[1:]))

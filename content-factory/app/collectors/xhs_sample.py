@@ -1,16 +1,20 @@
-"""M2 小红书采样器（P-1b）：经 xiaohongshu-mcp 只读采样。
+"""M2 小红书采样器（P-1b）：双源只读采样。
+
+数据源优先级：
+1. RedFox 爆款洞察（app.collectors.redfox，需 REDFOX_API_KEY，按调用计费）：
+   搜索结果自带 authorFans，低粉爆款判定可直接跑通。
+2. xiaohongshu-mcp（本地 Docker，数据小号登录）：无 Key 或 RedFox 调用
+   失败时降级。其 search_feeds 不含 fans（docs/p-1b-fans-probe.md），
+   条目仍落 hot_items 笔记级数据，但低粉爆款判定跳过（fans 未知不伪造），
+   由人工喂样本（POST /api/viral-samples/manual）补齐 fans 后进入同一管线。
 
 纪律（任务契约）：
-- 只调用 search_notes 等只读工具；禁止任何写接口、互动接口与账号行为
+- 只调用只读查询；禁止任何写接口、互动接口与账号行为
   （关注、点赞、评论、私信、回关、发布一律不碰）。
 - 数据小号凭据只进本地 mcp 服务，本仓库不存 Cookie / 二维码 / 账号信息。
-- 搜索结果若无作者 fans 字段（见 docs/p-1b-fans-probe.md 探针结论），
-  条目仍落 hot_items 笔记级数据，但低粉爆款判定跳过（fans 未知不伪造），
-  由人工喂样本（POST /api/viral-samples/manual）补齐 fans 后进入同一管线。
 """
 import json
 import logging
-import re
 
 import httpx
 
@@ -18,6 +22,7 @@ from .. import config
 from ..schemas import HotItem
 from ..services import radar
 from .base import BaseCollector, register_collector
+from .redfox import RedFoxError, _to_int, enabled as redfox_enabled, probe as redfox_probe, search_hot_items
 
 logger = logging.getLogger(__name__)
 
@@ -27,20 +32,6 @@ _FANS_KEYS = ("fans", "fans_count", "fan_count", "follower_count", "followers")
 
 class McpHttpError(RuntimeError):
     """xiaohongshu-mcp 请求失败（网络 / JSON-RPC 错误 / 工具报错）。"""
-
-
-def _to_int(value) -> int:
-    """互动数字段容错解析：int / "1234" / "1.2万" / None → int。"""
-    if value is None or isinstance(value, bool):
-        return 0
-    if isinstance(value, (int, float)):
-        return int(value)
-    text = str(value).strip().replace(",", "")
-    match = re.search(r"([\d.]+)\s*万", text)
-    if match:
-        return int(float(match.group(1)) * 10000)
-    match = re.search(r"\d+(\.\d+)?", text)
-    return int(float(match.group())) if match else 0
 
 
 def _decode_messages(resp: httpx.Response) -> list[dict]:
@@ -143,12 +134,47 @@ def extract_fans(note: dict) -> int:
     return 0
 
 
+def _normalize_note(note: dict) -> dict:
+    """把两种搜索响应形状归一成扁平视图。
+
+    实测（v2.5.0，2026-08-18）search_feeds 返回 {feeds:[{id, xsecToken,
+    noteCard:{displayTitle, user:{userId,nickname}, interactInfo:{likedCount,
+    collectedCount, commentCount}}}]}；早期/录制响应是扁平键（note_id/title/
+    user.fans/liked_count…）。归一后下游字段抽取只有一套键。
+    """
+    if "noteCard" not in note:
+        return note
+    card = note.get("noteCard") or {}
+    user = card.get("user") or {}
+    interact = card.get("interactInfo") or {}
+    return {
+        "note_id": note.get("id") or note.get("note_id"),
+        "title": card.get("displayTitle") or card.get("title"),
+        "user": user,
+        "liked_count": interact.get("likedCount"),
+        "collected_count": interact.get("collectedCount"),
+        "comment_count": interact.get("commentCount"),
+        "xsec_token": note.get("xsecToken"),
+        "note": note,
+    }
+
+
 def parse_search_notes(notes: list) -> list[HotItem]:
-    """mcp search_notes 结果 → HotItem 列表（无标题的条目跳过）。"""
+    """mcp 搜索结果 → HotItem 列表（无标题的条目跳过）。
+
+    入参可能是 [note, ...]，也可能是 [{feeds:[note,...]}] 包装（search_feeds
+    的真实返回）；两者都展开。URL 缺省按 note_id 构造 explore 链接。
+    """
+    flat: list[dict] = []
+    for entry in notes:
+        if isinstance(entry, dict) and isinstance(entry.get("feeds"), list):
+            flat.extend(e for e in entry["feeds"] if isinstance(e, dict))
+        elif isinstance(entry, dict):
+            flat.append(entry)
+
     items: list[HotItem] = []
-    for note in notes:
-        if not isinstance(note, dict):
-            continue
+    for raw in flat:
+        note = _normalize_note(raw)
         title = str(note.get("title") or "").strip()
         if not title:
             continue
@@ -177,12 +203,28 @@ def parse_search_notes(notes: list) -> list[HotItem]:
 def probe_fans(keyword: str = "AI工具") -> dict:
     """第 0 步 fans 字段探针（只读）。结论记录进 docs/p-1b-fans-probe.md。
 
-    用法：python -m app.collectors.xhs_sample probe [keyword]
+    双源各测各的：probe 测 RedFox（若配了 Key），probe-mcp 测 mcp。
+    用法：python -m app.collectors.xhs_sample probe [keyword] | probe-mcp [keyword]
     """
-    notes = call_mcp_tool("search_notes", {"keyword": keyword})
+    if redfox_enabled():
+        try:
+            return redfox_probe(keyword)
+        except RedFoxError as exc:
+            return {
+                "source": "redfox",
+                "keyword": keyword,
+                "error": str(exc),
+                "conclusion": "RedFox 调用失败：检查 Key 有效性 / 余额 / 网络后重试；mcp 可用 probe-mcp 单独测",
+            }
+    return _probe_mcp(keyword)
+
+
+def _probe_mcp(keyword: str) -> dict:
+    notes = call_mcp_tool("search_feeds", {"keyword": keyword})
     parsed = parse_search_notes(notes)
     fans_values = [item.fans for item in parsed]
     return {
+        "source": "mcp",
         "keyword": keyword,
         "note_count": len(parsed),
         "fans_available": any(fans > 0 for fans in fans_values),
@@ -197,8 +239,9 @@ def probe_fans(keyword: str = "AI工具") -> dict:
 
 @register_collector
 class XhsSampleCollector(BaseCollector):
-    """M2 小红书采样器：逐关键词调只读搜索，聚合为 HotItem 列表。
+    """M2 小红书采样器：逐关键词采样，聚合为 HotItem 列表。
 
+    单关键词内 RedFox 失败降级 mcp；两个源都失败才让异常冒泡计入熔断。
     URL 去重与领域过滤在 base.persist_hot_items 统一做；本类只负责拉取。
     """
 
@@ -207,20 +250,42 @@ class XhsSampleCollector(BaseCollector):
     def fetch(self) -> list[HotItem]:
         items: list[HotItem] = []
         for keyword in self._queries():
-            notes = self._search(keyword)
-            parsed = parse_search_notes(notes)
-            logger.info("xhs 采样 %s：%s 条笔记", keyword, len(parsed))
+            parsed, source = self._fetch_keyword(keyword)
+            # 记录命中该条的检索词：pillar 排期按标题或采样词匹配（标题未必含关键词）
+            for item in parsed:
+                raw = dict(item.raw or {})
+                raw.setdefault("keyword", keyword)
+                item.raw = raw
+            logger.info("xhs 采样 %s（%s）：%s 条笔记", keyword, source, len(parsed))
             items.extend(parsed)
         return items
 
+    def _fetch_keyword(self, keyword: str) -> tuple[list[HotItem], str]:
+        """单关键词采样：RedFox 优先（含 fans），失败降级 mcp search_feeds。"""
+        if redfox_enabled():
+            try:
+                return search_hot_items(keyword), "redfox"
+            except RedFoxError as exc:
+                logger.warning("redfox 采样 %s 失败，降级 mcp：%s", keyword, exc)
+        # 只读搜索工具（v2.5.0 实测名为 search_feeds；早期文档写作 search_notes）；
+        # 写/互动类工具一律不调用（任务契约 1）
+        return parse_search_notes(self._search(keyword)), "mcp"
+
     def _search(self, keyword: str) -> list[dict]:
-        # 只读搜索工具；写/互动类工具一律不调用（任务契约 1）
-        return call_mcp_tool("search_notes", {"keyword": keyword})
+        return call_mcp_tool("search_feeds", {"keyword": keyword})
 
     def _queries(self) -> list[str]:
+        # 优先级：环境变量显式指定 > 启用栏目的关键词池（P5，栏目驱动采样）> 领域词表
         if config.XHS_SAMPLE_KEYWORDS:
             return list(config.XHS_SAMPLE_KEYWORDS)
-        keywords: list[str] = []
+        from ..db import session_scope
+        from ..services import pillar as pillar_service
+
+        with session_scope() as session:
+            keywords = pillar_service.pillar_keywords(session)
+        if keywords:
+            return keywords[: config.XHS_SAMPLE_MAX_QUERIES]
+        keywords = []
         for domain_keywords in radar.load_domains().values():
             keywords.extend(domain_keywords)
         return keywords[: config.XHS_SAMPLE_MAX_QUERIES]
@@ -230,7 +295,10 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "probe":
         print(json.dumps(probe_fans(*argv[1:2]), ensure_ascii=False, indent=2))
         return 0
-    print("用法: python -m app.collectors.xhs_sample probe [keyword]")
+    if argv and argv[0] == "probe-mcp":
+        print(json.dumps(_probe_mcp(*argv[1:2]), ensure_ascii=False, indent=2))
+        return 0
+    print("用法: python -m app.collectors.xhs_sample probe [keyword] | probe-mcp [keyword]")
     return 2
 
 

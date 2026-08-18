@@ -1,0 +1,188 @@
+#!/usr/bin/env python
+"""P5 内容栏目验收脚本（可重复运行，不依赖外网与真实 Key）。
+
+覆盖：
+  1. 栏目 CRUD API（创建 / 列表 / 停用 / 有排期不可删）
+  2. 周排期：周更固定档（标题带周期区间、evidence 带素材快照）+
+     多期轮换档（每期绑一条素材、按 likes 倒序、不重复用素材、跨周素材不取）
+  3. 幂等：重复 plan 只补缺口 / 已满跳过
+  4. 撞题豁免：radar 高相似标题不会合并进 pillar 选题
+  5. 采样接线：启用栏目后 xhs_sample 检索词取栏目关键词池
+  6. /pillars 页面契约
+
+运行：.venv/Scripts/python tests/test_pillar.py
+"""
+import sys
+import tempfile
+import traceback
+from datetime import datetime, timedelta
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from app import config  # noqa: E402
+
+_TMP = Path(tempfile.mkdtemp(prefix="p5_check_"))
+config.DB_PATH = _TMP / "app.db"
+config.BACKUP_DIR = _TMP / "backups"
+config.DOMAINS_FILE = PROJECT_ROOT / "tests" / "fixtures" / "domains.test.yml"
+config.RUN_SCHEDULER = False
+config.NOTIFY_WEBHOOK = ""
+config.XHS_SAMPLE_KEYWORDS = []  # 走栏目关键词池分支
+
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+
+from app.collectors import xhs_sample  # noqa: E402
+from app.db import init_db, session_scope  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import HotItem, Pillar, Topic  # noqa: E402
+from app.services import pillar as pillar_service, radar  # noqa: E402
+
+FAILURES: list[str] = []
+
+
+def check(name: str, cond: bool, detail: str = "") -> None:
+    mark = "✓" if cond else "✗"
+    suffix = f"  ({detail})" if detail else ""
+    print(f"  {mark} {name}{suffix}")
+    if not cond:
+        FAILURES.append(name)
+
+
+def _seed_hot_items() -> None:
+    rows = [
+        HotItem(source="xhs", title="AI工具实测：效率翻倍的三个工具",
+                url="https://xhs/a1", fans=800, likes=2000, collects=100, comments=50),
+        HotItem(source="xhs", title="AIGC 新手入门指南",
+                url="https://xhs/a2", fans=1200, likes=1500, collects=80, comments=30),
+        HotItem(source="xhs", title="AI工具组合拳工作流分享",
+                url="https://xhs/a3", fans=600, likes=900, collects=60, comments=20),
+        HotItem(source="xhs", title="AI工具冷门但好用",
+                url="https://xhs/a4", fans=900, likes=700, collects=40, comments=10),
+        HotItem(source="xhs", title="与栏目无关的美食笔记",
+                url="https://xhs/a5", fans=100, likes=9999),
+        HotItem(source="xhs", title="上周的AI工具旧文（不该入选）",
+                url="https://xhs/a6", fans=500, likes=5000,
+                captured_at=datetime.now() - timedelta(days=8)),
+        # 标题不含关键词，但由栏目关键词采样回来（raw.keyword）→ 应命中
+        HotItem(source="xhs", title="深度体验分享（标题不带关键词）",
+                url="https://xhs/a7", fans=700, likes=2500, raw={"keyword": "AIGC"}),
+    ]
+    with session_scope() as session:
+        session.add_all(rows)
+
+
+def main() -> int:
+    print(f"临时工作目录：{_TMP}")
+    init_db()
+    _seed_hot_items()
+    client = TestClient(app)  # 不进 lifespan
+
+    print("\n[1] 栏目 CRUD API")
+    r1 = client.post("/api/pillars", json={
+        "name": "本周5个值得装的AI工具", "angle": "每周合集：5 个工具 + 一句话点评",
+        "domain": "AI与编程", "slots_per_week": 1,
+        "keywords": ["AI工具", "AIGC"], "active": True})
+    check("创建合集栏目 201", r1.status_code == 201, str(r1.status_code))
+    r2 = client.post("/api/pillars", json={
+        "name": "AI工具深挖", "angle": "单工具深度内容：痛点→做法→效果对比",
+        "domain": "AI与编程", "slots_per_week": 3,
+        "keywords": ["AI工具", "AIGC"], "active": True})
+    check("创建多期栏目 201", r2.status_code == 201, str(r2.status_code))
+    pid_c, pid_m = r1.json()["id"], r2.json()["id"]
+    lst = client.get("/api/pillars").json()
+    check("列表含两个栏目", len(lst) == 2 and lst[0]["slots_per_week"] == 1)
+
+    print("\n[2] 周排期（plan）")
+    plan = client.post("/api/pillars/plan").json()
+    by_name = {x["pillar"]: x for x in plan}
+    check("合集档新增 1 期", len(by_name["本周5个值得装的AI工具"]["created"]) == 1, str(plan))
+    check("多期档新增 3 期（素材只有 4 条命中，取 3）", len(by_name["AI工具深挖"]["created"]) == 3, str(plan))
+    with session_scope() as session:
+        pillar_topics = session.scalars(
+            select(Topic).where(Topic.source == "pillar").order_by(Topic.id)).all()
+        collection = [t for t in pillar_topics if (t.evidence or {}).get("pillar_id") == pid_c]
+        multi = [t for t in pillar_topics if (t.evidence or {}).get("pillar_id") == pid_m]
+        week_start, week_end = pillar_service.week_bounds()
+        check("合集标题带周期区间", collection[0].title.startswith("本周5个值得装的AI工具（")
+              and "–" in collection[0].title, collection[0].title)
+        check("合集 evidence 带 5 条素材快照（无美食/上周旧文）",
+              len(collection[0].evidence["items"]) == 5
+              and {it["url"] for it in collection[0].evidence["items"]}
+              == {"https://xhs/a1", "https://xhs/a2", "https://xhs/a3", "https://xhs/a4", "https://xhs/a7"})
+        check("多期每期绑一条素材且 URL 不重复",
+              len({t.evidence["items"][0]["url"] for t in multi}) == 3
+              and all(len(t.evidence["items"]) == 1 for t in multi))
+        check("多期按 likes 倒序取素材（含 raw.keyword 命中的 a7）",
+              [t.evidence["items"][0]["url"] for t in multi]
+              == ["https://xhs/a7", "https://xhs/a1", "https://xhs/a2"])
+        check("选题 source=pillar / angle=栏目角度 / expires_at=周末",
+              all(t.source == "pillar" and t.angle for t in pillar_topics)
+              and pillar_topics[0].expires_at == week_end)
+
+    print("\n[3] 幂等：重复 plan")
+    plan2 = client.post("/api/pillars/plan").json()
+    by_name2 = {x["pillar"]: x for x in plan2}
+    check("合集档跳过（existing=1）", by_name2["本周5个值得装的AI工具"]["existing"] == 1
+          and not by_name2["本周5个值得装的AI工具"]["created"], str(plan2))
+    check("多期档已满不新增", not by_name2["AI工具深挖"]["created"], str(plan2))
+
+    print("\n[4] 撞题豁免（radar 不合并进 pillar 选题）")
+    with session_scope() as session:
+        hot = session.scalars(select(HotItem).where(HotItem.url == "https://xhs/a1")).one()
+        outcome, topic = radar.create_or_merge_topic(
+            session, hot, "AI与编程", "AI工具", score=2.0)
+        # a1 的标题与合集/多期选题高度相似，但 pillar 选题不在候选集：
+        # 应新建 radar 选题而非合并进 pillar
+        check("radar 条目新建选题（未合并进 pillar）", outcome == "created" and topic.source == "radar",
+              f"outcome={outcome}")
+        pillar_rows = session.scalars(select(Topic).where(Topic.source == "pillar")).all()
+        check("pillar 选题数量与 evidence 不变（4 条，evidence 未被追加）",
+              len(pillar_rows) == 4
+              and all(len((t.evidence or {}).get("items", [])) in (1, 5) for t in pillar_rows))
+
+    print("\n[5] 采样接线：栏目关键词池优先于领域词表")
+    queries = xhs_sample.XhsSampleCollector()._queries()
+    check("检索词 = 栏目关键词池（去重）", queries == ["AI工具", "AIGC"], str(queries))
+
+    print("\n[6] 停用 / 删除约束")
+    r3 = client.put(f"/api/pillars/{pid_m}", json={
+        "name": "AI工具深挖", "angle": "单工具深度内容", "domain": "AI与编程",
+        "slots_per_week": 3, "keywords": [], "active": False})
+    check("停用栏目 200", r3.status_code == 200 and not r3.json()["active"])
+    plan3 = client.post("/api/pillars/plan").json()
+    check("停用栏目不参与排期", all(x["pillar"] != "AI工具深挖" for x in plan3), str(plan3))
+    queries2 = xhs_sample.XhsSampleCollector()._queries()
+    check("停用后采样词只剩启用栏目", queries2 == ["AI工具", "AIGC"], str(queries2))
+    r4 = client.delete(f"/api/pillars/{pid_c}")
+    check("有排期选题的栏目拒绝删除（409）", r4.status_code == 409, str(r4.status_code))
+    r5 = client.post("/api/pillars", json={"name": "临时栏目", "keywords": []})
+    r6 = client.delete(f"/api/pillars/{r5.json()['id']}")
+    check("无排期选题的栏目可删除", r6.status_code == 200, str(r6.status_code))
+
+    print("\n[7] /pillars 页面契约")
+    page = client.get("/pillars")
+    check("页面 200 且含栏目名与本周排期数", page.status_code == 200
+          and "本周5个值得装的AI工具" in page.text and "1 期" in page.text)
+
+    print()
+    if FAILURES:
+        print(f"FAIL：{len(FAILURES)} 项未通过")
+        for name in FAILURES:
+            print(f"  ✗ {name}")
+        return 1
+    print("PASS：P5 内容栏目验收全部通过")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        traceback.print_exc()
+        print("FAIL：脚本异常终止")
+        raise SystemExit(1)

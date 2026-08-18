@@ -40,6 +40,7 @@ config.LLM_MOCK = True
 config.RUN_SCHEDULER = False
 config.NOTIFY_WEBHOOK = ""
 config.XHS_SAMPLE_KEYWORDS = ["AI"]  # 单一检索词，mock 响应一轮返回全部笔记
+config.REDFOX_API_KEY = ""  # 隔离真实付费数据源：强制走 mcp 分支（测试桩在 _search）
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402

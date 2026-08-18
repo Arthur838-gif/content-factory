@@ -207,6 +207,8 @@ def create_or_merge_topic(
     Jaccard ≥ 0.5 视为同一选题：不新建行，样本快照追加进 evidence、score 取较大值；
     < 0.5 才新建（source=radar，expires_at = created_at + 72h）。
     score 缺省用 P-1a 基线分；低粉爆款样本传 viral_score 作为选题分。
+    pillar 选题（栏目排期，P5）不参与候选：系列内容标题天然相似，
+    且素材证据绑定栏目节奏，被合并会破坏排期。
     """
     now = datetime.now()
     window_start = now - timedelta(days=config.TOPIC_DEDUP_WINDOW_DAYS)
@@ -214,6 +216,7 @@ def create_or_merge_topic(
         select(Topic).where(
             Topic.created_at >= window_start,
             Topic.status != "archived",
+            Topic.source != "pillar",
             or_(Topic.expires_at.is_(None), Topic.expires_at > now),
         )
     ).all()
