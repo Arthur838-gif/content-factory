@@ -9,6 +9,10 @@
   4. 撞题豁免：radar 高相似标题不会合并进 pillar 选题
   5. 采样接线：启用栏目后 xhs_sample 检索词取栏目关键词池
   6. /pillars 页面契约
+  7. P5b 周主题：生成（mock）/ 素材不足拦截 / 确认改写
+  8. P5b 主题排期：按子话题分期 + 期数编号 + 幂等
+  9. P5b 生成系列上下文（主题/期数/其他期/合集枢纽）+ 选题归档
+ 10. P5b 合集素材不足拦截（防模型虚构内容）
 
 运行：.venv/Scripts/python tests/test_pillar.py
 """
@@ -30,6 +34,7 @@ config.DOMAINS_FILE = PROJECT_ROOT / "tests" / "fixtures" / "domains.test.yml"
 config.RUN_SCHEDULER = False
 config.NOTIFY_WEBHOOK = ""
 config.XHS_SAMPLE_KEYWORDS = []  # 走栏目关键词池分支
+config.LLM_MOCK = True  # P5b 周主题规划走 mock，不打真实 LLM
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
@@ -166,6 +171,83 @@ def main() -> int:
     page = client.get("/pillars")
     check("页面 200 且含栏目名与本周排期数", page.status_code == 200
           and "本周5个值得装的AI工具" in page.text and "1 期" in page.text)
+
+    print("\n[8] P5b 周主题：生成（mock）/ 素材不足拦截 / 确认")
+    r8 = client.post("/api/pillars", json={
+        "name": "AI实战周", "angle": "围绕每周主题出互补的几期", "domain": "AI与编程",
+        "slots_per_week": 2, "keywords": ["AI工具", "AIGC"], "active": True})
+    pid_d = r8.json()["id"]
+    t1 = client.post(f"/api/pillars/{pid_d}/theme")
+    body1 = t1.json()
+    check("主题生成 proposed（mock 主题 + 2 子话题）",
+          t1.status_code == 200 and body1["status"] == "proposed"
+          and body1["theme"] and len(body1["subtopics"]) == 2, str(body1)[:120])
+    r9 = client.post("/api/pillars", json={
+        "name": "无素材栏目", "slots_per_week": 1, "keywords": ["完全不可能命中的词xyz"], "active": True})
+    t2 = client.post(f"/api/pillars/{r9.json()['id']}/theme")
+    check("素材不足时主题生成 422（防编内容）", t2.status_code == 422, str(t2.status_code))
+    with session_scope() as session:
+        a3 = session.scalars(select(HotItem).where(HotItem.url == "https://xhs/a3")).one()
+        a3_id = a3.id
+    t3 = client.put(f"/api/pillars/{pid_d}/theme", json={
+        "theme": "AI 视频创作周", "subtopics": [
+            {"title": "AI 自动剪片实测", "hot_item_ids": [a3_id]},
+            {"title": "AI 写分镜脚本", "hot_item_ids": []}]})
+    check("确认主题（可改写文案）", t3.status_code == 200 and t3.json()["status"] == "confirmed"
+          and t3.json()["theme"] == "AI 视频创作周", str(t3.json())[:120])
+
+    print("\n[9] P5b 主题排期：按子话题分期 + 期数 + 幂等")
+    plan4 = client.post("/api/pillars/plan").json()
+    d4 = next(x for x in plan4 if x["pillar"] == "AI实战周")
+    check("主题模式建满 2 期", len(d4["created"]) == 2, str(d4))
+    with session_scope() as session:
+        deep = [t for t in session.scalars(
+            select(Topic).where(Topic.source == "pillar").order_by(Topic.id)).all()
+            if (t.evidence or {}).get("pillar_id") == pid_d]
+        check("标题带期数与子话题",
+              [t.title for t in deep] == ["AI实战周第1期｜AI 自动剪片实测", "AI实战周第2期｜AI 写分镜脚本"],
+              str([t.title for t in deep]))
+        check("evidence 带主题/期数/子话题",
+              all((t.evidence or {}).get("week_theme") == "AI 视频创作周"
+                  and (t.evidence or {}).get("episodes_total") == 2
+                  and (t.evidence or {}).get("subtopic") for t in deep))
+        check("子话题绑定指定素材；未绑素材回退最高赞",
+              deep[0].evidence["items"][0]["url"] == "https://xhs/a3"
+              and len(deep[1].evidence["items"]) == 1, str(deep[1].evidence["items"])[:120])
+    plan5 = client.post("/api/pillars/plan").json()
+    d5 = next(x for x in plan5 if x["pillar"] == "AI实战周")
+    check("主题排期幂等（子话题已覆盖不重建）", not d5["created"], str(d5))
+
+    print("\n[10] P5b 生成系列上下文 + 选题归档")
+    from app.api.routes_topics import _build_variables
+
+    with session_scope() as session:
+        deep = [t for t in session.scalars(select(Topic).where(Topic.source == "pillar")).all()
+                if (t.evidence or {}).get("pillar_id") == pid_d]
+        vars1 = _build_variables(session, deep[0])
+        check("系列变量：主题/期数/总数/其他期",
+              vars1["series_theme"] == "AI 视频创作周" and vars1["series_episode"] == 1
+              and vars1["series_total"] == 2
+              and vars1["series_others"] == ["AI实战周第2期｜AI 写分镜脚本"], str(vars1["series_others"]))
+        coll = [t for t in session.scalars(select(Topic)).all()
+                if (t.evidence or {}).get("pillar_id") == pid_c][0]
+        vars2 = _build_variables(session, coll)
+        check("合集选题的系列变量（自身即枢纽）",
+              vars2["series_hub"] == coll.title and vars2["series_others"] == [],
+              str(vars2["series_hub"])[:60])
+    with session_scope() as session:
+        tid = session.scalars(select(Topic).where(Topic.title == "AI实战周第1期｜AI 自动剪片实测")).one().id
+    ra = client.put(f"/api/topics/{tid}/archive")
+    check("归档选题 200", ra.status_code == 200 and ra.json()["status"] == "archived", str(ra.status_code))
+    home = client.get("/")
+    check("归档后工作台不再展示该选题",
+          home.status_code == 200 and "AI 自动剪片实测" not in home.text)
+
+    print("\n[11] P5b 合集素材不足拦截（防模型虚构内容）")
+    plan6 = client.post("/api/pillars/plan").json()
+    d6 = next(x for x in plan6 if x["pillar"] == "无素材栏目")
+    check("素材不足不建合集、返回 warning", not d6["created"] and "素材" in d6.get("warning", ""),
+          str(d6))
 
     print()
     if FAILURES:

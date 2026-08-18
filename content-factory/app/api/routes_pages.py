@@ -49,11 +49,14 @@ def topics_page(request: Request):
 
         pillar_topics = [
             t for t in topics
-            if t.source == "pillar" and t.created_at >= week_start
+            if t.source == "pillar" and t.created_at >= week_start and t.status != "archived"
         ]
         # 过期未用的 pillar 选题（上周遗留）单独归入灵感池底部，不混进本周排期
-        stale_pillar = [t for t in topics if t.source == "pillar" and t.created_at < week_start]
-        idea_topics = [t for t in topics if t.source != "pillar"] + stale_pillar
+        stale_pillar = [
+            t for t in topics
+            if t.source == "pillar" and t.created_at < week_start and t.status != "archived"
+        ]
+        idea_topics = [t for t in topics if t.source != "pillar" and t.status != "archived"] + stale_pillar
 
         grouped: list[tuple[Pillar, list[Topic]]] = []
         for p in pillars:
@@ -81,6 +84,15 @@ def topics_page(request: Request):
         collector = session.scalars(
             select(CollectorState).where(CollectorState.name == "xhs_sample")
         ).first()
+        # P5b 周主题：分组头展示（深挖联动的主线）
+        from ..models import WeekTheme
+
+        themes = {
+            th.pillar_id: th
+            for th in session.scalars(
+                select(WeekTheme).where(WeekTheme.week_start == week_start)
+            ).all()
+        }
     return templates.TemplateResponse(
         request=request,
         name="topics.html",
@@ -91,6 +103,7 @@ def topics_page(request: Request):
             "idea_topics": idea_topics,
             "progress": progress,
             "collector": collector,
+            "themes": themes,
             "now": datetime.now(),
             "week_range": f"{week_start.strftime('%m.%d')}–{week_end.strftime('%m.%d')}",
         },
@@ -112,12 +125,22 @@ def pillars_page(request: Request):
             pid = (topic.evidence or {}).get("pillar_id")
             if pid is not None:
                 planned[pid] = planned.get(pid, 0) + 1
+        # P5b 周主题卡片：建议（proposed）待确认，确认（confirmed）后按主题分期
+        from ..models import WeekTheme
+
+        themes = {
+            th.pillar_id: th
+            for th in session.scalars(
+                select(WeekTheme).where(WeekTheme.week_start == week_start)
+            ).all()
+        }
     return templates.TemplateResponse(
         request=request,
         name="pillars.html",
         context={
             "pillars": pillars,
             "planned": planned,
+            "themes": themes,
             "week_range": f"{week_start.strftime('%m.%d')}–{week_end.strftime('%m.%d')}",
         },
     )

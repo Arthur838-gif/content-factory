@@ -187,6 +187,29 @@ class Pillar(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class WeekTheme(Base):
+    """week_themes：栏目周主题（P5b，一个栏目每周一条）。
+
+    深挖栏目每周先定主题再分期：LLM 从当周采样素材归纳 theme 并拆出
+    subtopics（互补子话题，各成一期深挖），排期按子话题建题并带期数，
+    解决"每期各写各的、系列无联动"的问题。
+    status：proposed（建议，待确认）/ confirmed（已确认，排期采用）。
+    """
+
+    __tablename__ = "week_themes"
+    __table_args__ = (Index("ix_week_themes_pillar_week", "pillar_id", "week_start", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pillar_id: Mapped[int] = mapped_column(Integer, ForeignKey("pillars.id"), comment="所属栏目")
+    week_start: Mapped[datetime] = mapped_column(DateTime, comment="周一 00:00（周界键）")
+    theme: Mapped[str] = mapped_column(String(128), default="", comment="本周主题，如：AI 视频创作实战周")
+    subtopics: Mapped[list | None] = mapped_column(
+        JSON, nullable=True, comment='[{"title": 子话题, "hot_item_ids": [素材id]}]'
+    )
+    status: Mapped[str] = mapped_column(String(16), default="proposed", comment="proposed / confirmed")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class CollectorState(Base):
     """collector_state：采集器熔断状态（P-1b）。
 
@@ -216,4 +239,5 @@ ALL_MODELS = (
     PublishRecord,
     CollectorState,
     Pillar,
+    WeekTheme,
 )

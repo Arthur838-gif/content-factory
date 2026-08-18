@@ -76,7 +76,9 @@ class GenerateResponse(BaseModel):
 
 def _build_variables(session, topic: Topic) -> dict:
     """把 topic 上下文组装成模板变量（A2 用 title/angle/domain/reference_points，
-    A1 另用 tag_candidates：取 tag_library 中同领域热度前 10 的标签，冷启动可为空表）。"""
+    A1 另用 tag_candidates：取 tag_library 中同领域热度前 10 的标签，冷启动可为空表）。
+    P5b：pillar 选题另带系列上下文（周主题/期数/本周其他期/合集篇），
+    让每期生成时知道自己在系列中的位置，形成联动而不是各写各的。"""
     reference_points = ""
     evidence = topic.evidence or {}
     items = evidence.get("items") if isinstance(evidence, dict) else None
@@ -92,13 +94,45 @@ def _build_variables(session, topic: Topic) -> dict:
         .order_by(desc(TagLibrary.heat))
         .limit(10)
     ).all()
-    return {
+    variables = {
         "title": topic.title or "",
         "angle": topic.angle or "",
         "domain": topic.domain or "",
         "reference_points": reference_points,
         "tag_candidates": list(tag_rows),
+        "series_theme": "",
+        "series_pillar": "",
+        "series_episode": "",
+        "series_total": "",
+        "series_others": [],
+        "series_hub": "",
     }
+    if topic.source == "pillar" and isinstance(evidence, dict):
+        from ..services import pillar as pillar_service
+
+        week_start, _ = pillar_service.week_bounds()
+        siblings = [
+            t
+            for t in pillar_service._week_pillar_topics(session, week_start)
+            if (t.evidence or {}).get("pillar_id") == evidence.get("pillar_id")
+            and t.status != "archived"
+        ]
+        siblings.sort(key=lambda t: t.id)
+        variables["series_theme"] = str(evidence.get("week_theme") or "")
+        variables["series_pillar"] = str(evidence.get("pillar_name") or "")
+        # 期数：优先 evidence 里排期时写好的；老选题（无 episode）按兄弟序推，
+        # 但本周没有任何分期标记时不编期数（合集档单独成篇，不是"第 1 期"）
+        episode = evidence.get("episode")
+        if not episode and any((s.evidence or {}).get("episode") for s in siblings):
+            episode = next((i for i, t in enumerate(siblings, 1) if t.id == topic.id), "")
+        variables["series_episode"] = episode or ""
+        variables["series_total"] = evidence.get("episodes_total") or ""
+        variables["series_others"] = [t.title for t in siblings if t.id != topic.id]
+        # 合集篇（无 episode 标记）是系列流量枢纽，深挖结尾导流指向它
+        variables["series_hub"] = next(
+            (t.title for t in siblings if not (t.evidence or {}).get("episode")), ""
+        )
+    return variables
 
 
 def _has_unarchived_published(session, topic_id: int, platform: str) -> bool:
@@ -259,3 +293,18 @@ def generate(
     return GenerateResponse(
         article_id=article_id, status=status, platform=platform, error=error
     )
+
+
+@router.put("/topics/{topic_id}/archive")
+def archive_topic(topic_id: int) -> dict:
+    """归档选题（status=archived）：工作台不再展示、不再计入排期期数。
+
+    P5b：确认周主题后想重排本周深挖，先归档旧的各写各的选题；
+    已生成的文章不受影响（仍在文章页，只是选题不再排期）。
+    """
+    with session_scope() as session:
+        topic = session.get(Topic, topic_id)
+        if topic is None:
+            raise HTTPException(404, f"topic {topic_id} 不存在")
+        topic.status = "archived"
+        return {"id": topic_id, "status": "archived"}

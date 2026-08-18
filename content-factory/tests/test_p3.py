@@ -92,7 +92,7 @@ def main() -> int:
           html.find("DeepSeek 发布新一代") != -1
           and html.find("DeepSeek 发布新一代") < html.find("大模型价格战再起"))
     check("radar 来源徽标 + 双端操作按钮",
-          '>radar<' in html and "generate(1,'wechat')" in html and "generate(1,'xhs')" in html)
+          '>radar<' in html and "generate(1,'wechat',this)" in html and "generate(1,'xhs',this)" in html)
 
     print("\n[2] 预览页 GET /articles/{id}（xhs ready）")
     resp = client.get(f"/articles/{aid1}")

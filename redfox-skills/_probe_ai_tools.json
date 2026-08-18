@@ -1,0 +1,10 @@
+{
+ "code": 2000,
+ "data": {
+  "likeTheTop500": [],
+  "lowPowderExplosiveArticle": [],
+  "sevenDaysOfIncrements": [],
+  "singleDayIncrements": []
+ },
+ "msg": "成功"
+}

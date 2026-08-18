@@ -89,8 +89,57 @@ def plan_pillars(pillar_id: int | None = None) -> list[dict]:
     """生成本周内容计划：全部启用栏目，或指定栏目（body 可省）。
 
     幂等：重复调用只补缺口（多期档）/ 直接跳过（周更档）。
+    深挖栏目若已确认本周主题，则按主题子话题分期（P5b）。
     """
     try:
         return pillar_service.plan_week(pillar_id=pillar_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from None
+
+
+class ThemeConfirmIn(BaseModel):
+    theme: str | None = None
+    subtopics: list[dict] | None = None
+
+
+@router.post("/pillars/{pillar_id}/theme")
+def generate_theme(pillar_id: int) -> dict:
+    """从本周采样素材规划周主题（LLM 归纳主题 + 子话题分期，status=proposed）。"""
+    with session_scope() as session:
+        pillar = session.get(Pillar, pillar_id)
+        if pillar is None:
+            raise HTTPException(404, f"栏目 {pillar_id} 不存在")
+        try:
+            row = pillar_service.generate_week_theme(session, pillar)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except RuntimeError as exc:
+            raise HTTPException(502, str(exc)) from None
+        return _theme_dict(row)
+
+
+@router.put("/pillars/{pillar_id}/theme")
+def confirm_theme(pillar_id: int, body: ThemeConfirmIn) -> dict:
+    """确认本周主题（可顺带改写 theme/subtopics 文案），确认后排期按主题分期。"""
+    with session_scope() as session:
+        pillar = session.get(Pillar, pillar_id)
+        if pillar is None:
+            raise HTTPException(404, f"栏目 {pillar_id} 不存在")
+        try:
+            row = pillar_service.confirm_week_theme(
+                session, pillar, theme=body.theme, subtopics=body.subtopics
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        return _theme_dict(row)
+
+
+def _theme_dict(row) -> dict:
+    return {
+        "id": row.id,
+        "pillar_id": row.pillar_id,
+        "week_start": row.week_start,
+        "theme": row.theme,
+        "subtopics": row.subtopics or [],
+        "status": row.status,
+    }

@@ -11,7 +11,16 @@
 <td><div class="actions">
 <button class="secondary" onclick="togglePillar({{ p.id }}, {{ 'false' if p.active else 'true' }}, this)">{{ '停用' if p.active else '启用' }}</button>
 {% if not planned.get(p.id) %}<button class="secondary" onclick="delPillar({{ p.id }}, this)">删除</button>{% endif %}
-</div></td></tr>{% endfor %}
+</div></td></tr>
+{% set th = themes.get(p.id) %}{% if th %}<tr class="muted"><td colspan="6" style="background:var(--bg,#f8f8f8)">
+<strong>本周主题</strong>：{{ th.theme or '（空）' }} <span class="badge {{ 'ready' if th.status == 'confirmed' else 'failed' }}">{{ '已确认' if th.status == 'confirmed' else '待确认' }}</span>
+{% if th.subtopics %}<br>子话题分期：{% for s in th.subtopics %}{{ loop.index }}. {{ s.title }}　{% endfor %}{% endif %}
+<br><button class="secondary" onclick="genTheme({{ p.id }}, this)">重新生成主题</button>
+{% if th.status != 'confirmed' %}<button class="secondary" onclick="confirmTheme({{ p.id }}, this)">确认并按主题排期</button>{% endif %}
+</td></tr>{% elif p.slots_per_week > 1 %}<tr class="muted"><td colspan="6" style="background:var(--bg,#f8f8f8)">
+<strong>本周主题</strong>：未规划 <button class="secondary" onclick="genTheme({{ p.id }}, this)">从本周素材生成主题建议</button> <span class="muted">确认后深挖各期围绕同一主题展开（推荐）</span>
+</td></tr>{% endif %}
+{% endfor %}
 </tbody></table>
 <p><button onclick="planWeek(this)">生成本周计划（全部启用栏目）</button> <span class="muted">幂等：已排满的栏目自动跳过</span></p></div>
 {% else %}<div class="card muted">暂无栏目，先在下面建一个。</div>{% endif %}
@@ -58,9 +67,29 @@ async function planWeek(btn) {
     const r = await fetch('/api/pillars/plan', {method: 'POST'});
     const d = await r.json();
     if (!r.ok) { alert(d.detail || '排期失败'); return; }
-    const summary = d.map(x => `${x.pillar}：新增 ${x.created.length} 期`).join('；');
+    const summary = d.map(x => `${x.pillar}：新增 ${x.created.length} 期${x.warning ? '（⚠ ' + x.warning + '）' : ''}`).join('；');
     alert('本周计划：' + (summary || '无启用栏目'));
     location.href = '/';
   } finally { btn.disabled = false; btn.textContent = '生成本周计划（全部启用栏目）'; }
+}
+async function genTheme(id, btn) {
+  btn.disabled = true; btn.textContent = '生成中…（读素材 + LLM 归纳，约半分钟）';
+  try {
+    const r = await fetch(`/api/pillars/${id}/theme`, {method: 'POST'});
+    const d = await r.json();
+    if (!r.ok) { alert(d.detail || '主题生成失败'); return; }
+    alert(`主题建议：${d.theme}\n\n子话题：\n` + d.subtopics.map((s, i) => `${i + 1}. ${s.title}`).join('\n') + '\n\n确认后才按主题排期。');
+    location.reload();
+  } finally { btn.disabled = false; btn.textContent = '重新生成主题'; }
+}
+async function confirmTheme(id, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/pillars/${id}/theme`, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})});
+    const d = await r.json();
+    if (!r.ok) { alert(d.detail || '确认失败'); return; }
+    alert('主题已确认，点「生成本周计划」按主题分期排期。');
+    location.reload();
+  } finally { btn.disabled = false; }
 }
 </script>{% endblock %}

@@ -120,3 +120,21 @@ class ViralTeardown(BaseModel):
     structures: list[str] = Field(default_factory=list, description="结构套路")
     tags: list[TeardownTag] = Field(default_factory=list, description="建议沉淀的标签")
     samples: list[TeardownSample] = Field(default_factory=list, description="逐样本结论")
+
+
+class SubtopicPlan(BaseModel):
+    """周主题规划对单个子话题（深挖一期）的安排。"""
+
+    title: str = Field(description="子话题标题（一期深挖的选题，不带栏目名前缀）")
+    hot_item_ids: list[int] = Field(default_factory=list, description="支撑该子话题的素材 hot_item id")
+
+
+class WeekThemePlan(BaseModel):
+    """P5b 周主题规划输出 Schema：深挖栏目每周先定主题，再按子话题分期。
+
+    LLM 从本周采样素材里归纳一个主题并拆出 N 个互补子话题（N = 栏目每周期数），
+    解决"每期各写各的、系列无联动"的问题。
+    """
+
+    theme: str = Field(description="本周主题，10-20 字，如「AI 视频创作实战周」")
+    subtopics: list[SubtopicPlan] = Field(default_factory=list, description="子话题分期安排")

@@ -21,9 +21,11 @@
 <h2 id="pillar-topics">本周栏目排期</h2>
 {% if grouped %}
 {% for pillar, ts in grouped %}
+{% set th = themes.get(pillar.id) if pillar else None %}
 <div class="card">
 <div class="field-title"><h3 style="margin:0">{{ pillar.name if pillar else '未分组栏目' }}</h3>
 {% if pillar %}<span class="muted">{{ pillar.angle[:80] }}{% if pillar.angle|length > 80 %}…{% endif %}</span>{% endif %}</div>
+{% if th and th.theme %}<p><span class="badge {{ 'ready' if th.status == 'confirmed' else 'failed' }}">本周主题</span> <strong>{{ th.theme }}</strong>{% if th.status != 'confirmed' %} <span class="muted">（待确认，去 <a href="/pillars">内容栏目</a> 确认）</span>{% endif %}</p>{% endif %}
 {% if ts %}
 <table><thead><tr><th>选题</th><th>平台</th><th>最新生成</th><th>保鲜截止</th><th>操作</th></tr></thead><tbody>
 {% for topic in ts %}<tr>
@@ -31,7 +33,7 @@
 <td><span class="badge">{{ topic.domain or '—' }}</span></td>
 <td>{% set rows=latest.get(topic.id,{}) %}{% for platform,article in rows.items() %}<a class="badge {{ article.status }}" href="/articles/{{ article.id }}">{{ platform }} · {{ article.status }}</a> {% else %}<span class="muted">未生成</span>{% endfor %}</td>
 <td>{% if topic.expires_at %}{{ topic.expires_at.strftime('%m-%d %H:%M') }}{% else %}<span class="muted">不适用</span>{% endif %}</td>
-<td><div class="actions"><button onclick="generate({{ topic.id }},'wechat',this)">生成公众号</button><button onclick="generate({{ topic.id }},'xhs',this)">生成小红书</button></div></td></tr>{% endfor %}
+<td><div class="actions"><button onclick="generate({{ topic.id }},'wechat',this)">生成公众号</button><button onclick="generate({{ topic.id }},'xhs',this)">生成小红书</button><button class="secondary" onclick="archiveTopic({{ topic.id }}, this)" title="移出排期，让位给按主题重排的新选题">归档</button></div></td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">本周尚未排期。到 <a href="/pillars">内容栏目</a> 点「生成本周计划」。</p>{% endif %}
 </div>
@@ -50,4 +52,12 @@
 <td>{% set rows=latest.get(topic.id,{}) %}{% for platform,article in rows.items() %}<a class="badge {{ article.status }}" href="/articles/{{ article.id }}">{{ platform }} · {{ article.status }}</a> {% else %}<span class="muted">暂无</span>{% endfor %}</td>
 <td><div class="actions"><button onclick="generate({{ topic.id }},'wechat',this)">生成公众号</button><button onclick="generate({{ topic.id }},'xhs',this)">生成小红书</button></div></td></tr>{% endfor %}
 </tbody></table></div>{% else %}<div class="card muted">暂无灵感选题，去 <a href="/viral">素材采样</a> 触发采集。</div>{% endif %}
+<script>
+async function archiveTopic(id, btn) {
+  if (!confirm('归档该选题？将移出本周排期（已生成的文章保留），让位给按主题重排的新选题。')) return;
+  btn.disabled = true;
+  const r = await fetch(`/api/topics/${id}/archive`, {method: 'PUT'});
+  if (r.ok) location.reload(); else alert('归档失败：' + (((await r.json().catch(() => ({}))).detail) || r.status));
+}
+</script>
 {% endblock %}

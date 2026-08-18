@@ -94,8 +94,18 @@ _MOCK_TEARDOWN = {
 }
 
 
+# P5b 周主题规划 mock：只验证管线结构（WeekTheme 落库 + 分期建题），非真实质量依据
+_MOCK_THEME_PLAN = {
+    "theme": "AI 效率工具实战周",
+    "subtopics": [
+        {"title": "AI 写作提效的真实边界", "hot_item_ids": []},
+        {"title": "会议纪要自动化小组合", "hot_item_ids": []},
+    ],
+}
+
+
 def _mock_article(schema_cls: type[T]) -> T:
-    """返回一份符合指定 Schema 的固定 JSON（P0 WechatArticle，P1 XhsNote，P-1b ViralTeardown）。"""
+    """返回一份符合指定 Schema 的固定 JSON（P0 WechatArticle，P1 XhsNote，P-1b ViralTeardown，P5b WeekThemePlan）。"""
     name = schema_cls.__name__
     data = (
         _MOCK_WECHAT
@@ -104,6 +114,8 @@ def _mock_article(schema_cls: type[T]) -> T:
         if name == "XhsNote"
         else _MOCK_TEARDOWN
         if name == "ViralTeardown"
+        else _MOCK_THEME_PLAN
+        if name == "WeekThemePlan"
         else None
     )
     if data is None:
