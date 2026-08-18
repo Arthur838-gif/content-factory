@@ -4,7 +4,7 @@
 
 <div class="card"><h3>采集器状态</h3>
 <table><thead><tr><th>采集器</th><th>状态</th><th>连续失败</th><th>最近错误</th><th>操作</th></tr></thead><tbody>
-{% for state in states %}<tr><td>{{ state.name }}</td><td><span class="badge {{ 'failed' if state.status == 'open' else 'ready' }}">{{ '熔断' if state.status == 'open' else '正常' }}</span></td><td>{{ state.consecutive_failures }}</td><td><span class="muted">{{ (state.last_error or '')[:160] }}</span></td>
+{% for state in states %}<tr><td>{{ labels.get(state.name, state.name) }}<br><span class="muted">{{ state.name }}</span></td><td><span class="badge {{ 'failed' if state.status == 'open' else 'ready' }}">{{ '熔断' if state.status == 'open' else '正常' }}</span></td><td>{{ state.consecutive_failures }}</td><td><span class="muted">{{ (state.last_error or '')[:160] }}</span></td>
 <td><div class="actions"><button onclick="runCollector('{{ state.name }}')">立即采样</button><button class="secondary" onclick="resumeCollector('{{ state.name }}')">解除熔断</button></div></td></tr>{% endfor %}
 </tbody></table>
 <p class="actions"><button class="secondary" onclick="runCollector('xhs_sample')">手动采样一轮（xhs_sample）</button><button class="secondary" onclick="runTeardown()">立即周度拆解（调试）</button></p>
