@@ -159,13 +159,21 @@ def persist_hot_items(session, items: list[HotItem], collector: str = "") -> Col
 
     domains = domain_service.load_domains(session)  # 整批只查一次领域词表（同事务，不另开连接）
     created = merged = filtered_out = inserted = viral_created = 0
+    dropped: list[str] = []
     for url, item in batch.items():
         if url in existing:
             duplicates_skipped += 1
             continue
         matched = radar.match_domain(item.title, domains)
         if matched is None:
+            # 关键词采样召回（raw.keyword 由 worker 写入）：标题没命中词表时按采样词
+            # 反查放行——采样词来自栏目词池/词表，是策展过的检索意图，且 RedFox 侧
+            # 已丢弃与检索词无关的全站推荐兜底；标题命中优先（更能代表内容领域）
+            sampled_kw = str((item.raw or {}).get("keyword") or "")
+            matched = domain_service.keyword_domain(sampled_kw, domains)
+        if matched is None:
             filtered_out += 1
+            dropped.append(item.title[:40])
             continue
         domain, keyword = matched
         row = HotItemORM(
@@ -201,6 +209,11 @@ def persist_hot_items(session, items: list[HotItem], collector: str = "") -> Col
             else:
                 merged += 1
         inserted += 1
+
+    if dropped:
+        # 丢弃原因可追溯：抓了什么但没入库，一眼能看出是词表没覆盖还是噪声
+        logger.info("领域过滤丢弃 %s 条（标题与采样词均未命中词表）：%s",
+                    len(dropped), "；".join(dropped[:5]))
 
     return CollectorRunResult(
         collector=collector,

@@ -208,6 +208,27 @@ def match_domain(
     return None
 
 
+def keyword_domain(
+    keyword: str,
+    domains: dict[str, list[str]] | None = None,
+    session=None,
+) -> tuple[str, str] | None:
+    """采样词精确反查 (领域, 关键词)；不在词表返回 None（ordering 优先）。
+
+    关键词采样条目的入库过滤用：标题没命中词表时，采样词本身在词表
+    （栏目词池建栏目时已登记，是策展过的检索意图）则按该词的领域放行——
+    花钱定向搜回的结果不该再被标题字面匹配扔掉。
+    """
+    kw = (keyword or "").strip().lower()
+    if not kw:
+        return None
+    for domain, keywords in (domains if domains is not None else load_domains(session)).items():
+        for k in keywords:
+            if k.lower() == kw:
+                return domain, k
+    return None
+
+
 def list_domains(session=None, include_disabled: bool = True) -> list[dict]:
     """领域清单（管理 API / 页面下拉用），ordering 升序。"""
     own = session is None

@@ -132,3 +132,59 @@ def test_pillar_create_registers_domain_atomically(isolated_env):
         result = domain_service.upsert_domain(s, "新领域甲", [], source="user")
         assert result["created"] is False
     assert domain_service.load_domains()["新领域甲"] == ["词一", "词二"]
+
+
+def test_keyword_domain_reverse_lookup(seeded_env):
+    """采样词精确反查：命中返回 (领域, 词表原词)，先声明者优先；只精确匹配不做子串。"""
+    with session_scope() as s:
+        # 同一个词后补进新领域：反查仍取先声明的 AI与编程
+        domain_service.upsert_domain(s, "后补领域", ["编程"], source="user")
+    assert domain_service.keyword_domain("编程") == ("AI与编程", "编程")
+    assert domain_service.keyword_domain("chatgpt") == ("AI与编程", "ChatGPT")  # 大小写不敏感，返回词表原词
+    assert domain_service.keyword_domain("我在学编程") is None  # 不做子串匹配（那是 match_domain 的事）
+    assert domain_service.keyword_domain("词表里没有的词") is None
+    assert domain_service.keyword_domain("") is None
+    # 预载词表口径（批量场景传 domains）与现查一致
+    domains = domain_service.load_domains()
+    assert domain_service.keyword_domain("存钱", domains) == ("效率与副业", "存钱")
+
+
+def test_persist_keyword_fallback_admission(seeded_env):
+    """关键词采样兜底入库：标题没命中词表时按采样词反查放行；热榜条目（无采样词）依旧过滤。"""
+    from sqlalchemy import select
+
+    from app.collectors.base import persist_hot_items
+    from app.models import HotItem, Topic
+    from app.schemas import HotItem as HotItemIn
+
+    items = [
+        # 采样召回：标题无词表词、采样词在词表 → 兜底放行，领域按采样词归属
+        HotItemIn(source="weibo", title="我把6年微信读书记录做成了线上阅读角",
+                  url="https://t.example/fallback", raw={"keyword": "编程"}),
+        # 标题命中（写作→内容创作）优先于采样词（编程→AI与编程）
+        HotItemIn(source="weibo", title="写作心法",
+                  url="https://t.example/title-hit", raw={"keyword": "编程"}),
+        # 热榜噪声：没有采样词可反查 → 维持标题过滤
+        HotItemIn(source="weibo", title="周末去哪玩", url="https://t.example/hotboard"),
+        # 采样词不在词表 → 依旧过滤
+        HotItemIn(source="weibo", title="今天天气不错",
+                  url="https://t.example/unknown-kw", raw={"keyword": "不存在的词"}),
+    ]
+    with session_scope() as s:
+        result = persist_hot_items(s, items, collector="xhs_sample")
+    assert (result.fetched, result.inserted, result.filtered_out) == (4, 2, 2)
+    assert result.topics_created == 2
+
+    urls = [i.url for i in items]
+    with session_scope() as s:
+        rows = {r.url: r for r in s.scalars(
+            select(HotItem).where(HotItem.url.in_(urls))).all()}
+        # 兜底与标题命中的入库，两条噪声没入库
+        assert set(rows) == {"https://t.example/fallback", "https://t.example/title-hit"}
+        # 采样词随行保留：pillar 排期按「标题或采样词」匹配素材
+        assert rows["https://t.example/fallback"].raw["keyword"] == "编程"
+        topics = {t.title: t for t in s.scalars(
+            select(Topic).where(Topic.title.in_([i.title for i in items[:2]]))).all()}
+    # 领域归属：兜底按采样词（AI与编程·编程），标题命中按标题（内容创作·写作）
+    assert topics["我把6年微信读书记录做成了线上阅读角"].domain == "AI与编程"
+    assert topics["写作心法"].domain == "内容创作"

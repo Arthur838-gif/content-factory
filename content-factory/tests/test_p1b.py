@@ -80,7 +80,7 @@ class AlertReceiver(BaseHTTPRequestHandler):
         pass
 
 
-# mock/录制响应：一次 search_notes 返回 5 条笔记（含重复 URL / 非领域 / 无 fans / 低赞）
+# mock/录制响应：一次 search_notes 返回 5 条笔记（含重复 URL / 标题不沾词表 / 无 fans / 低赞）
 _MOCK_NOTES = [
     {  # 入选低粉爆款：fans=1200, likes=1200, collects=450, comments=300 → 2.5
         "note_id": "viral1", "title": "程序员用AI提效的实战心得",
@@ -91,7 +91,8 @@ _MOCK_NOTES = [
         "note_id": "viral1", "title": "程序员用AI提效的实战心得（重复）",
         "user": {"nickname": "小A"}, "liked_count": "10",
     },
-    {  # 标题不命中任何领域关键词 → 过滤
+    {  # 标题不命中任何领域关键词 → 旧口径被过滤；新口径按采样词兜底放行
+      # （关键词搜回的结果不该再被标题字面匹配扔掉；无 fans 只落 hot_items 不判定爆款）
         "note_id": "offdomain", "title": "周末露营装备清单与路线",
         "user": {"nickname": "小C"}, "liked_count": "5000",
     },
@@ -156,8 +157,8 @@ def main() -> int:
     print(f"    结果：{r1.model_dump()}")
     check("fetched=5", r1.fetched == 5)
     check("同 URL 重复只入库一次（duplicates_skipped=1）", r1.duplicates_skipped == 1)
-    check("非领域条目被过滤（filtered_out=1）", r1.filtered_out == 1)
-    check("入库 3 条", r1.inserted == 3)
+    check("标题不沾词表的采样条目按采样词兜底放行（filtered_out=0）", r1.filtered_out == 0)
+    check("入库 4 条", r1.inserted == 4)
     check("入选低粉爆款 1 条（viral_created=1）", r1.viral_created == 1)
     check("自动建题 1 条", r1.topics_created == 1 and r1.topics_merged == 0)
 
