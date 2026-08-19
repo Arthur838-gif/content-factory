@@ -17,7 +17,8 @@
   <label>标题</label><input id="f-title" placeholder="笔记标题">
   <label>作者昵称</label><input id="f-author">
 </div><div>
-  <label>领域</label><select id="f-domain">{% for d in domains %}<option>{{ d }}</option>{% endfor %}</select>
+  <label>领域（可下拉选或手填）</label><input id="f-domain" list="f-domain-options" placeholder="如：AI与编程 / 学习教育">
+  <datalist id="f-domain-options">{% for d in domain_options %}<option value="{{ d }}"></option>{% endfor %}</datalist>
   <div class="grid" style="grid-template-columns:repeat(2,1fr);gap:8px">
     <div><label>粉丝数</label><input id="f-fans" type="number" min="0" value="0"></div>
     <div><label>点赞</label><input id="f-likes" type="number" min="0" value="0"></div>

@@ -9,7 +9,8 @@
   4. 落库与建题：入选样本写 viral_samples 并自动生成 topics(source=radar,
      status=new)，evidence 含 URL/作者/互动数/viral_score/命中关键词
   5. 撞题去重：Jaccard ≥ 0.5 合并（不新建、evidence 追加、score 取大）；< 0.5 新建
-  6. 人工喂样本：与自动样本同一管线；缺 fans / 非法数字 / 非法 URL / 未知领域 → 422；
+  6. 人工喂样本：与自动样本同一管线；缺 fans / 非法数字 / 非法 URL → 422；
+     手填新领域 → 201（领域自由填写，不卡词表）
      重复 URL → 409，不写半成品
   7. A3 模板幂等入库 + 周度拆解（mock LLM）：reason 回写、tag_library.heat 累计
   8. 熔断：连续 3 次失败 → 熔断 + 告警一次 + 拒绝执行；人工恢复后才能继续
@@ -235,7 +236,6 @@ def main() -> int:
         ("fans 为负 → 422", {**payload_c, "url": "https://x/com/bad-fans"}, {"fans": -5}, 422),
         ("likes 非数字 → 422", {**payload_c, "url": "https://x/com/bad-likes"}, {"likes": "abc"}, 422),
         ("URL 非法 → 422", {**payload_c}, {"url": "ftp://not-http"}, 422),
-        ("未知领域 → 422", {**payload_c, "url": "https://x/com/bad-domain"}, {"domain": "不存在的领域"}, 422),
         ("重复 URL → 409", {**payload_a}, {}, 409),
     ]
     for name, base, patch, expected in cases:
@@ -252,6 +252,11 @@ def main() -> int:
         stale = session.scalars(select(HotItem.id).where(HotItem.url.like("https://x/com/%"))).all()
     check("非法/重复请求未写入任何数据", viral_after == viral_before and not stale,
           f"viral {viral_before}→{viral_after}, stale={stale}")
+    # 领域自由填写：手填新领域不再 422，正常走管线入库（放在不写半成品断言之后）
+    resp_free = client.post("/api/viral-samples/manual", json={
+        **payload_c, "url": "https://x/free-domain", "domain": "不存在的领域"})
+    check("手填新领域 → 201（领域自由填写）", resp_free.status_code == 201,
+          f"{resp_free.status_code}: {resp_free.text[:120]}")
 
     print("\n[10] 样本列表 API 与页面")
     resp = client.get("/api/viral-samples?domain=AI与编程")

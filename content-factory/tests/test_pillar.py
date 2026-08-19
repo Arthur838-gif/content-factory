@@ -188,9 +188,9 @@ def main() -> int:
     page = client.get("/pillars")
     check("页面 200 且含栏目名与本周排期数", page.status_code == 200
           and "本周5个值得装的AI工具" in page.text and "1 期" in page.text)
-    check("新建表单领域为下拉、带关键词推荐标签容器",
-          'id="domain-select"' in page.text and 'id="kw-chips"' in page.text
-          and 'name="domain"' in page.text)
+    check("新建表单领域为可选可填（input+datalist）、带关键词推荐容器",
+          'id="domain-input"' in page.text and 'id="domain-options"' in page.text
+          and 'id="kw-chips"' in page.text)
 
     print("\n[8] P5b 周主题：生成（mock）/ 素材不足拦截 / 确认")
     r8 = client.post("/api/pillars", json={

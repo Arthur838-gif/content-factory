@@ -230,13 +230,18 @@ def viral_page(request: Request):
             for s, i in rows
         ]
     states = collectors_base.collector_status()
+    from ..collectors.redfox import XHS_CATEGORIES
+
+    domains = radar.load_domains()
+    # 领域候选 = 词表自定义领域 + 官方 24 类目（datalist 可下拉选也可手填）
+    domain_options = list(domains) + [c for c in XHS_CATEGORIES if c not in domains]
     return templates.TemplateResponse(
         request=request,
         name="viral.html",
         context={"samples": samples, "states": states, "labels": _viral_labels(),
                  "scheduled": config.XHS_SAMPLE_SCHEDULED,
                  "interval_hours": config.XHS_SAMPLE_INTERVAL_HOURS,
-                 "domains": list(radar.load_domains())},
+                 "domain_options": domain_options},
     )
 
 

@@ -178,7 +178,7 @@ def main() -> int:
     finally:
         config.REDFOX_API_KEY = no_key
 
-    print("\n[6] 建栏目自动注册官方类目")
+    print("\n[6] 建栏目自动注册领域（官方类目 + 手填新领域）")
     before = radar.load_domains()
     r_p = client.post("/api/pillars", json={
         "name": "学习教育测试", "domain": "学习教育", "slots_per_week": 1,
@@ -190,15 +190,26 @@ def main() -> int:
     r_p2 = client.post("/api/pillars", json={
         "name": "自定义领域测试", "domain": "AI与编程", "slots_per_week": 1,
         "keywords": ["AI"], "active": True})
-    check("自定义领域建栏目不动词表", r_p2.status_code == 201 and radar.load_domains() == after)
+    check("已有领域无新词不动词表", r_p2.status_code == 201 and radar.load_domains() == after)
+    r_p3 = client.post("/api/pillars", json={
+        "name": "手填新领域测试", "domain": "健身减脂", "slots_per_week": 1,
+        "keywords": ["减脂餐", "体态矫正"], "active": True})
+    check("手填新领域建栏目 → 连同关键词登记进词表",
+          r_p3.status_code == 201 and radar.load_domains().get("健身减脂") == ["减脂餐", "体态矫正"],
+          str(radar.load_domains().get("健身减脂")))
 
-    print("\n[7] /pillars 表单契约")
+    print("\n[7] /pillars 与 /viral 表单契约")
     page = client.get("/pillars")
-    check("下拉分组：官方类目 + 自定义领域",
-          page.status_code == 200 and "官方类目（小红书 24 类）" in page.text
-          and "自定义领域（词表已有）" in page.text and "学习教育" in page.text)
+    check("领域可选可填（input+datalist），候选含官方类目与自定义领域",
+          page.status_code == 200 and 'id="domain-input"' in page.text
+          and 'id="domain-options"' in page.text and "学习教育" in page.text
+          and "AI与编程" in page.text)
     check("获取推荐词 / 对标账号按钮就位",
           "获取推荐词" in page.text and "找对标账号" in page.text)
+    viral_page = client.get("/viral")
+    check("人工喂样本领域同步可选可填（官方类目进候选）",
+          viral_page.status_code == 200 and 'id="f-domain"' in viral_page.text
+          and 'list="f-domain-options"' in viral_page.text and "学习教育" in viral_page.text)
 
     print()
     if FAILURES:

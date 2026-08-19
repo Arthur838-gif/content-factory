@@ -51,14 +51,8 @@ def create_manual_sample(payload: ManualSampleInput) -> dict:
     """人工喂样本（降级模式入口）：与自动样本走同一打分、落库、撞题与建题管线。
 
     fans 缺失或互动数字非法由 Pydantic 拦截（422）；URL 重复返回 409，不写半成品。
+    领域自由填写：词表里的领域用于展示候选，手填新领域直接按原样落库标注。
     """
-    domains = radar.load_domains()
-    if payload.domain not in domains:
-        raise HTTPException(
-            status_code=422,
-            detail=f"未知领域 {payload.domain}；可用：{'、'.join(domains)}",
-        )
-
     with session_scope() as session:
         existed = session.scalars(
             select(HotItemORM.id).where(HotItemORM.url == payload.url)

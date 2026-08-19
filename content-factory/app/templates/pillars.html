@@ -30,10 +30,8 @@
 <form id="pillar-form">
 <label>栏目名称（如：本周5个值得装的AI工具）</label><input name="name" required>
 <label>固定角度 / 结构说明（每期复用，喂生成提示词）</label><textarea name="angle" rows="3"></textarea>
-<label>关联领域（官方类目可获取推荐词/对标账号；决定素材入库过滤与标签候选）</label><select name="domain" id="domain-select">
-<optgroup label="自定义领域（词表已有）">{% for d in custom_domains %}<option value="{{ d }}"{% if loop.first %} selected{% endif %}>{{ d }}</option>{% endfor %}</optgroup>
-<optgroup label="官方类目（小红书 24 类）">{% for c in official_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</optgroup>
-</select>
+<label>关联领域（可下拉选或手填；官方类目可获取推荐词/对标账号）</label><input name="domain" id="domain-input" list="domain-options" placeholder="如：AI与编程 / 学习教育" required>
+<datalist id="domain-options">{% for d in custom_domains %}<option value="{{ d }}"></option>{% endfor %}{% for c in official_categories %}<option value="{{ c }}"></option>{% endfor %}</datalist>
 <label>每周期数（1=周更固定档，2-7=多期轮换）</label><input name="slots_per_week" type="number" min="1" max="7" value="1">
 <label>采样关键词池（逗号分隔；点下方推荐词直接加入，也可手填）</label><input name="keywords" placeholder="AI工具,AIGC">
 <div class="actions" id="kw-chips"></div>
@@ -64,7 +62,7 @@ function _chip(kw) {
   return b;
 }
 function renderKwArea() {
-  const domain = document.getElementById('domain-select').value;
+  const domain = document.getElementById('domain-input').value.trim();
   const box = document.getElementById('kw-chips');
   const notes = document.getElementById('idea-notes');
   box.innerHTML = ''; notes.innerHTML = '';
@@ -86,12 +84,14 @@ function renderKwArea() {
         notes.innerHTML = '该类目近 7 天暂无爆款数据（榜单每天 19:00 更新），请手动填关键词或换类目。';
       }
     }
-  } else {
+  } else if (DOMAINS[domain]) {
     (DOMAINS[domain] || []).forEach(kw => box.appendChild(_chip(kw)));
+  } else if (domain) {
+    notes.innerHTML = '新领域：创建时会连同关键词自动登记进词表（采集入库过滤按关键词命中）。';
   }
 }
 async function fetchIdeas(btn) {
-  const domain = document.getElementById('domain-select').value;
+  const domain = document.getElementById('domain-input').value.trim();
   btn.disabled = true; btn.textContent = '获取中…（约几秒）';
   try {
     const r = await fetch('/api/discovery/keyword-ideas?category=' + encodeURIComponent(domain));
@@ -102,7 +102,7 @@ async function fetchIdeas(btn) {
   } finally { btn.disabled = false; btn.textContent = '获取推荐词（调 RedFox 七日爆款，1 次调用）'; }
 }
 async function fetchAccounts(btn) {
-  const domain = document.getElementById('domain-select').value;
+  const domain = document.getElementById('domain-input').value.trim();
   const kw = _currentKws()[0] || domain;
   const box = document.getElementById('benchmark-accounts');
   btn.disabled = true; btn.textContent = '搜索中…（约几秒）';
@@ -116,7 +116,7 @@ async function fetchAccounts(btn) {
       : '未搜到相关账号，换个关键词试试。';
   } finally { btn.disabled = false; btn.textContent = '找对标账号（调 RedFox）'; }
 }
-document.getElementById('domain-select').addEventListener('change', renderKwArea);
+document.getElementById('domain-input').addEventListener('input', renderKwArea);
 renderKwArea();
 function _payload() {
   const f = new FormData(document.getElementById('pillar-form'));
