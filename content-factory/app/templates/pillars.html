@@ -19,8 +19,8 @@
 <br><button class="secondary" onclick="genTheme({{ p.id }}, this)">重新生成主题</button>
 {% if th.status != 'confirmed' %}<button class="secondary" onclick="confirmTheme({{ p.id }}, this)">确认并按主题排期</button>
 {% elif planned.get(p.id) %}<button class="secondary" onclick="replanTheme({{ p.id }}, this)">按主题重排（归档本周旧选题）</button>{% endif %}
-</td></tr>{% elif p.slots_per_week > 1 %}<tr class="muted"><td colspan="6" style="background:var(--bg,#f8f8f8)">
-<strong>本周主题</strong>：未规划 <button class="secondary" onclick="genTheme({{ p.id }}, this)">从本周素材生成主题建议</button> <span class="muted">确认后深挖各期围绕同一主题展开（推荐）</span>
+</td></tr>{% else %}<tr class="muted"><td colspan="6" style="background:var(--bg,#f8f8f8)">
+<strong>本周主题</strong>：未规划 <button class="secondary" onclick="genTheme({{ p.id }}, this)">从本周素材生成主题建议</button> <span class="muted">{% if p.slots_per_week > 1 %}确认后深挖各期围绕同一主题展开（推荐）{% else %}确认后本周这一期围绕主题展开（主题会注入生成提示词）{% endif %}</span>
 </td></tr>{% endif %}
 {% endfor %}
 </tbody></table>
