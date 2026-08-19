@@ -6,7 +6,7 @@
 import logging
 import shutil
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -49,13 +49,60 @@ def list_pillars() -> list[dict]:
         return [_pillar_dict(p) for p in rows]
 
 
+def _auto_sample_pillar(pillar_id: int) -> None:
+    """新建栏目后对该栏目的关键词池定向采样（后台任务，不阻塞创建响应）。
+
+    走 run_collector 同一管线：熔断同样生效、失败同样计数；采样完成前
+    页面轮询 /api/pillars/{id}/materials 展示进度。
+    """
+    from ..collectors import xhs_sample
+    from ..collectors.base import CircuitOpenError, run_collector
+
+    try:
+        with session_scope() as session:
+            pillar = session.get(Pillar, pillar_id)
+            keywords = list(pillar.keywords or []) if pillar else []
+        if not keywords:
+            return
+        result = run_collector("xhs_sample", collector=xhs_sample.XhsSampleCollector(keywords=keywords))
+        logger.info(
+            "新栏目自动采样完成（pillar=%s）：fetched=%s inserted=%s", pillar_id, result.fetched, result.inserted
+        )
+    except CircuitOpenError as exc:
+        logger.warning("新栏目自动采样被熔断拦截（pillar=%s）：%s", pillar_id, exc)
+    except Exception:
+        # 后台任务异常不冒泡（不影响已创建成功的栏目），熔断告警由 run_collector 负责
+        logger.exception("新栏目自动采样失败（pillar=%s）", pillar_id)
+
+
 @router.post("/pillars", status_code=201)
-def create_pillar(body: PillarIn) -> dict:
+def create_pillar(body: PillarIn, background: BackgroundTasks) -> dict:
     with session_scope() as session:
         row = Pillar(**body.model_dump())
         session.add(row)
         session.flush()
-        return _pillar_dict(row)
+        result = _pillar_dict(row)
+    if config.PILLAR_AUTO_SAMPLE and body.keywords:
+        # 栏目先建好（关键词池登记）再采样：persist 时按 URL 去重与领域过滤，
+        # 排期时才能命中。采样在响应返回后的后台执行，页面轮询素材数。
+        background.add_task(_auto_sample_pillar, row.id)
+        result["auto_sampling"] = True
+    else:
+        result["auto_sampling"] = False
+    return result
+
+
+@router.get("/pillars/{pillar_id}/materials")
+def pillar_materials(pillar_id: int) -> dict:
+    """本周命中该栏目关键词的素材条数（新建栏目自动采样进度轮询用）。"""
+    with session_scope() as session:
+        pillar = session.get(Pillar, pillar_id)
+        if pillar is None:
+            raise HTTPException(404, f"栏目 {pillar_id} 不存在")
+        return {
+            "matched": pillar_service.matched_pool_size(session, pillar),
+            "min_required": pillar_service.COLLECTION_MIN_MATERIALS,
+        }
 
 
 @router.put("/pillars/{pillar_id}")

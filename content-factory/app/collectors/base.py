@@ -214,9 +214,13 @@ def persist_hot_items(session, items: list[HotItem], collector: str = "") -> Col
     )
 
 
-def run_collector(name: str) -> CollectorRunResult:
-    """手动/定时触发入口：熔断检查 → 拉取 → 落库。整轮失败计数并熔断。"""
-    collector = get_collector(name)
+def run_collector(name: str, collector: BaseCollector | None = None) -> CollectorRunResult:
+    """手动/定时触发入口：熔断检查 → 拉取 → 落库。整轮失败计数并熔断。
+
+    collector 传预构建实例（定向采样：如新建栏目后只采该栏目的关键词），
+    缺省按注册表构建。
+    """
+    collector = collector or get_collector(name)
     if circuit_open(name):
         raise CircuitOpenError(f"采集器 {name} 已熔断，需人工恢复后才能继续执行")
     try:

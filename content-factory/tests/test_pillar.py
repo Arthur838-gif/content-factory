@@ -37,6 +37,7 @@ config.RUN_SCHEDULER = False
 config.NOTIFY_WEBHOOK = ""
 config.XHS_SAMPLE_KEYWORDS = []  # 走栏目关键词池分支
 config.LLM_MOCK = True  # P5b 周主题规划走 mock，不打真实 LLM
+config.PILLAR_AUTO_SAMPLE = False  # 隔离真实采样：建栏目后台任务在 [15] 单独测
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
@@ -153,6 +154,8 @@ def main() -> int:
     print("\n[5] 采样接线：栏目关键词池优先于领域词表")
     queries = xhs_sample.XhsSampleCollector()._queries()
     check("检索词 = 栏目关键词池（去重）", queries == ["AI工具", "AIGC"], str(queries))
+    check("定向采样：显式关键词覆盖栏目池/词表推导",
+          xhs_sample.XhsSampleCollector(keywords=["新栏目词"])._queries() == ["新栏目词"])
 
     print("\n[6] 停用 / 删除约束")
     r3 = client.put(f"/api/pillars/{pid_m}", json={
@@ -185,6 +188,9 @@ def main() -> int:
     page = client.get("/pillars")
     check("页面 200 且含栏目名与本周排期数", page.status_code == 200
           and "本周5个值得装的AI工具" in page.text and "1 期" in page.text)
+    check("新建表单领域为下拉、带关键词推荐标签容器",
+          'id="domain-select"' in page.text and 'id="kw-chips"' in page.text
+          and 'name="domain"' in page.text)
 
     print("\n[8] P5b 周主题：生成（mock）/ 素材不足拦截 / 确认")
     r8 = client.post("/api/pillars", json={
@@ -322,6 +328,34 @@ def main() -> int:
     check("空标题 422", re_.status_code == 422, str(re_.status_code))
     home14 = client.get("/")
     check("工作台显示新标题", home14.status_code == 200 and "省下百万预算的AI大片工作流" in home14.text)
+
+    print("\n[15] 新建栏目自动采样 + 素材进度端点")
+    from app.api import routes_pillars
+
+    sampled_pillars: list[int] = []
+    original_task = routes_pillars._auto_sample_pillar
+    routes_pillars._auto_sample_pillar = lambda pid: sampled_pillars.append(pid)
+    config.PILLAR_AUTO_SAMPLE = True
+    try:
+        r15 = client.post("/api/pillars", json={
+            "name": "自动采样验证", "domain": "AI与编程", "slots_per_week": 1,
+            "keywords": ["AI工具"], "active": True})
+        body15 = r15.json()
+        # TestClient 同步执行后台任务：创建返回时应已完成采样调度
+        check("创建 201 且响应带 auto_sampling 标记", r15.status_code == 201
+              and body15.get("auto_sampling") is True and sampled_pillars == [body15["id"]],
+              f"{body15.get('auto_sampling')} {sampled_pillars}")
+        r15b = client.post("/api/pillars", json={"name": "无词栏目", "keywords": []})
+        check("无关键词栏目不触发采样", r15b.json().get("auto_sampling") is False)
+    finally:
+        config.PILLAR_AUTO_SAMPLE = False
+        routes_pillars._auto_sample_pillar = original_task
+    m15 = client.get(f"/api/pillars/{pid_c}/materials")
+    check("素材进度端点返回本周命中数与门槛",
+          m15.status_code == 200 and m15.json()["matched"] >= 3
+          and m15.json()["min_required"] == pillar_service.COLLECTION_MIN_MATERIALS, str(m15.json()))
+    m404 = client.get("/api/pillars/99999/materials")
+    check("不存在栏目 404", m404.status_code == 404, str(m404.status_code))
 
     print()
     if FAILURES:

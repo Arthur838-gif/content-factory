@@ -28,6 +28,7 @@ config.RUN_SCHEDULER = False
 config.NOTIFY_WEBHOOK = ""
 config.LLM_MOCK = True
 config.GITHUB_MIN_STARS = 100
+config.PILLAR_AUTO_SAMPLE = False  # 建栏目不触发真实采样（隔离 RedFox/mcp）
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402

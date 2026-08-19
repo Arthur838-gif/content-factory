@@ -86,6 +86,12 @@ def _snapshot(item: HotItem, keyword: str) -> dict:
     return radar._evidence_snapshot(item, domain, keyword)
 
 
+def matched_pool_size(session, pillar: Pillar) -> int:
+    """本周命中栏目关键词的素材条数（页面轮询新建栏目自动采样进度用）。"""
+    week_start, _ = week_bounds()
+    return len(_matched_pool(session, pillar, week_start))
+
+
 def _matched_pool(session, pillar: Pillar, week_start: datetime) -> list[tuple[HotItem, str]]:
     """本周命中栏目关键词的采样素材（点赞倒序），主题规划与排期共用。
 

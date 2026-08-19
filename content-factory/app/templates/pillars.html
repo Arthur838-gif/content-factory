@@ -30,12 +30,37 @@
 <form id="pillar-form">
 <label>栏目名称（如：本周5个值得装的AI工具）</label><input name="name" required>
 <label>固定角度 / 结构说明（每期复用，喂生成提示词）</label><textarea name="angle" rows="3"></textarea>
-<label>关联领域（标签候选用，如：AI与编程）</label><input name="domain" value="AI与编程">
+<label>关联领域（从词表选：决定素材入库过滤与标签候选）</label><select name="domain" id="domain-select">{% for d in domains %}<option value="{{ d }}"{% if loop.first %} selected{% endif %}>{{ d }}</option>{% endfor %}</select>
 <label>每周期数（1=周更固定档，2-7=多期轮换）</label><input name="slots_per_week" type="number" min="1" max="7" value="1">
-<label>采样关键词池（逗号分隔）</label><input name="keywords" placeholder="AI工具,AIGC">
+<label>采样关键词池（逗号分隔；点下方推荐词直接加入，也可手填）</label><input name="keywords" placeholder="AI工具,AIGC">
+<div class="actions" id="kw-chips"></div>
 <p><button>创建栏目</button></p>
+<p class="muted" id="create-status">创建后自动对该栏目的关键词发起一轮采样（RedFox 按调用计费，约每个关键词 1 次调用），完成后即可排期。</p>
 </form></div>
 <script>
+const DOMAINS = {{ domains | tojson }};
+function renderKwChips() {
+  const box = document.getElementById('kw-chips');
+  const input = document.querySelector('#pillar-form [name=keywords]');
+  const current = input.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  box.innerHTML = '';
+  (DOMAINS[document.getElementById('domain-select').value] || []).forEach(kw => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'secondary';
+    b.textContent = current.includes(kw) ? '✓ ' + kw : kw;
+    b.onclick = () => {
+      const kws = input.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+      const i = kws.indexOf(kw);
+      if (i >= 0) kws.splice(i, 1); else kws.push(kw);
+      input.value = kws.join(',');
+      renderKwChips();
+    };
+    box.appendChild(b);
+  });
+}
+document.getElementById('domain-select').addEventListener('change', renderKwChips);
+renderKwChips();
 function _payload() {
   const f = new FormData(document.getElementById('pillar-form'));
   return {
@@ -47,9 +72,40 @@ function _payload() {
 }
 document.getElementById('pillar-form').addEventListener('submit', async e => {
   e.preventDefault();
-  const r = await fetch('/api/pillars', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(_payload())});
-  if (r.ok) location.reload(); else alert((await r.json()).detail || '创建失败');
+  const btn = e.target.querySelector('button');
+  const status = document.getElementById('create-status');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/pillars', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(_payload())});
+    if (!r.ok) { alert((await r.json()).detail || '创建失败'); return; }
+    const d = await r.json();
+    if (!d.auto_sampling) { location.reload(); return; }
+    await _waitSampling(d.id, status, d.keywords.length);
+    location.reload();
+  } finally { btn.disabled = false; }
 });
+async function _waitSampling(id, status, keywordCount) {
+  // 采完一轮统一落库，素材数会从 0 直接跳到最终值；3 秒一轮，90 秒兜底
+  for (let i = 0; i < 30; i++) {
+    await new Promise(res => setTimeout(res, 3000));
+    try {
+      const m = await (await fetch(`/api/pillars/${id}/materials`)).json();
+      if (m.matched >= m.min_required) {
+        status.textContent = `采样完成：本周已命中 ${m.matched} 条素材，可以生成本周计划了。`;
+        await new Promise(res => setTimeout(res, 800));
+        return;
+      }
+      if (m.matched > 0) {
+        status.textContent = `采样完成：本周命中 ${m.matched} 条（建议 ≥${m.min_required}），可到「素材采样」补采后再排期。`;
+        await new Promise(res => setTimeout(res, 1200));
+        return;
+      }
+      status.textContent = `栏目已创建，正在自动采样 ${keywordCount} 个关键词（RedFox 按调用计费）…`;
+    } catch (_) { /* 轮询失败重试 */ }
+  }
+  status.textContent = '采样仍在后台进行或未命中素材：稍后刷新查看，也可到「素材采样」手动补采。';
+  await new Promise(res => setTimeout(res, 2000));
+}
 async function renamePillar(id, btn) {
   const list = await (await fetch('/api/pillars')).json();
   const p = list.find(x => x.id === id);

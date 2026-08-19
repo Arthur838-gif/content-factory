@@ -151,6 +151,8 @@ def pillars_page(request: Request):
             "planned": planned,
             "themes": themes,
             "week_range": f"{week_start.strftime('%m.%d')}–{week_end.strftime('%m.%d')}",
+            # 领域词表：表单领域下拉 + 关键词推荐标签（新手不用猜填什么）
+            "domains": radar.load_domains(),
         },
     )
 

@@ -247,6 +247,11 @@ class XhsSampleCollector(BaseCollector):
 
     name = "xhs_sample"
 
+    def __init__(self, keywords: list[str] | None = None):
+        # 定向采样（新建栏目后自动补素材）时显式传关键词，绕过 _queries
+        # 的"栏目关键词池 / 领域词表"推导
+        self._keywords_override = [k for k in (keywords or []) if k][: config.XHS_SAMPLE_MAX_QUERIES]
+
     def fetch(self) -> list[HotItem]:
         items: list[HotItem] = []
         for keyword in self._queries():
@@ -275,7 +280,9 @@ class XhsSampleCollector(BaseCollector):
         return call_mcp_tool("search_feeds", {"keyword": keyword})
 
     def _queries(self) -> list[str]:
-        # 优先级：环境变量显式指定 > 启用栏目的关键词池（P5，栏目驱动采样）> 领域词表
+        # 优先级：显式传入（定向采样）> 环境变量 > 启用栏目的关键词池（P5，栏目驱动采样）> 领域词表
+        if self._keywords_override:
+            return list(self._keywords_override)
         if config.XHS_SAMPLE_KEYWORDS:
             return list(config.XHS_SAMPLE_KEYWORDS)
         from ..db import session_scope

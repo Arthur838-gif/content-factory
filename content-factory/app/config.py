@@ -85,6 +85,9 @@ XHS_SAMPLE_INTERVAL_HOURS = int(os.environ.get("CF_XHS_SAMPLE_INTERVAL_HOURS", "
 # 定时采样默认关闭（RedFox 按调用计费，采样改为 /viral 页手动触发；
 # 要恢复定时在 .env 加 CF_XHS_SAMPLE_SCHEDULED=true）
 XHS_SAMPLE_SCHEDULED = os.environ.get("CF_XHS_SAMPLE_SCHEDULED", "false").strip().lower() in ("1", "true", "yes")
+# 新建栏目后自动对该栏目的关键词池发起一轮定向采样（后台执行；RedFox 按调用
+# 计费，一次建栏约消耗 = 关键词数 次调用。要关闭在 .env 加 CF_PILLAR_AUTO_SAMPLE=false）
+PILLAR_AUTO_SAMPLE = os.environ.get("CF_PILLAR_AUTO_SAMPLE", "true").strip().lower() in ("1", "true", "yes")
 # GitHub 开源项目采集（P7：合集栏目的真实工具素材；未鉴权 10 次/分钟）
 # 时效优先：只收"最近新建却已攒星"的新锐项目（sort=stars 在 created 窗口内
 # 即涨星最快），避免 AutoGPT 这类老牌项目长期霸榜
