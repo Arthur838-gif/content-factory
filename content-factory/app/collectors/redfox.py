@@ -85,8 +85,10 @@ def _post(path: str, payload: dict):
         "REDFOX_API_KEY": config.REDFOX_API_KEY,
         "Content-Type": "application/json",
     }
+    # 连接建立快败（网络不通没必要等满超时），慢响应等满 REDFOX_TIMEOUT_SECONDS
+    timeout = httpx.Timeout(config.REDFOX_TIMEOUT_SECONDS, connect=10.0)
     try:
-        with httpx.Client(timeout=config.REDFOX_TIMEOUT_SECONDS) as client:
+        with httpx.Client(timeout=timeout) as client:
             resp = client.post(f"{config.REDFOX_BASE_URL}{path}", json=payload, headers=headers)
     except httpx.HTTPError as exc:
         raise RedFoxError(f"{path} 网络错误：{exc}") from exc
@@ -103,8 +105,9 @@ def _post(path: str, payload: dict):
 def _get(path: str, params: dict):
     """GET 版请求（七日爆款等查询接口），鉴权/错误处理与 _post 一致。"""
     headers = {"REDFOX_API_KEY": config.REDFOX_API_KEY}
+    timeout = httpx.Timeout(config.REDFOX_TIMEOUT_SECONDS, connect=10.0)
     try:
-        with httpx.Client(timeout=config.REDFOX_TIMEOUT_SECONDS) as client:
+        with httpx.Client(timeout=timeout) as client:
             resp = client.get(f"{config.REDFOX_BASE_URL}{path}", params=params, headers=headers)
     except httpx.HTTPError as exc:
         raise RedFoxError(f"{path} 网络错误：{exc}") from exc
