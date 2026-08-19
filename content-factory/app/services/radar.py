@@ -42,6 +42,36 @@ def load_domains() -> dict[str, list[str]]:
     return result
 
 
+def register_domain(domain: str, keywords: list[str]) -> bool:
+    """注册/合并领域词表（建栏目选官方类目时自动登记，保证采集入库过滤能命中）。
+
+    已有领域只追加缺失关键词；返回是否发生写入。写回统一为
+    {domains: {名称: {keywords: [...]}}} 结构（原文件两种写法都兼容读）。
+    """
+    text = config.DOMAINS_FILE.read_text(encoding="utf-8") if config.DOMAINS_FILE.is_file() else ""
+    data = yaml.safe_load(text) or {}
+    domains = data.get("domains") or {}
+    spec = domains.get(domain)
+    existing = list((spec or {}).get("keywords", []) if isinstance(spec, dict) else (spec or []))
+    added = [kw for kw in keywords if kw and kw not in existing]
+    if domain in domains and not added:
+        return False
+    existing.extend(added)
+    domains[domain] = {"keywords": existing}
+    data["domains"] = domains
+    header = (
+        "# 领域关键词表（改词表不改代码）。采集落库规则：条目标题命中任一关键词才入库\n"
+        "# hot_items 并自动建候选选题；多领域命中取先声明者。\n"
+        "# 官方类目由系统在创建栏目时自动登记/合并关键词（app/services/xhs_discovery）。\n"
+    )
+    config.DOMAINS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    config.DOMAINS_FILE.write_text(
+        header + yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return True
+
+
 def match_domain(title: str, domains: dict[str, list[str]] | None = None) -> tuple[str, str] | None:
     """返回 (领域, 命中关键词)；多领域命中取 YAML 中先声明者；未命中返回 None。
 

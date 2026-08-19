@@ -120,6 +120,7 @@ def topics_page(request: Request):
 @router.get("/pillars")
 def pillars_page(request: Request):
     """栏目管理页（P5）：列表 + 建栏目表单 + 生成本周计划。"""
+    from ..collectors.redfox import XHS_CATEGORIES
     from ..services import pillar as pillar_service
 
     with session_scope() as session:
@@ -153,6 +154,9 @@ def pillars_page(request: Request):
             "week_range": f"{week_start.strftime('%m.%d')}–{week_end.strftime('%m.%d')}",
             # 领域词表：表单领域下拉 + 关键词推荐标签（新手不用猜填什么）
             "domains": radar.load_domains(),
+            # 官方 24 类目（七日爆款）分组展示；词表里其余算自定义领域
+            "official_categories": list(XHS_CATEGORIES),
+            "custom_domains": [d for d in radar.load_domains() if d not in XHS_CATEGORIES],
         },
     )
 

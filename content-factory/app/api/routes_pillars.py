@@ -77,6 +77,16 @@ def _auto_sample_pillar(pillar_id: int) -> None:
 
 @router.post("/pillars", status_code=201)
 def create_pillar(body: PillarIn, background: BackgroundTasks) -> dict:
+    from ..collectors.redfox import XHS_CATEGORIES
+    from ..services import radar
+
+    # 官方类目若词表还没有：先登记（含栏目关键词），否则采集入库时标题
+    # 命不中任何领域会被整批过滤（每日一句踩过的坑）
+    if body.domain in XHS_CATEGORIES:
+        try:
+            radar.register_domain(body.domain, body.keywords)
+        except Exception:
+            logger.exception("官方类目词表登记失败（domain=%s）", body.domain)
     with session_scope() as session:
         row = Pillar(**body.model_dump())
         session.add(row)

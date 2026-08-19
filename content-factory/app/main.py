@@ -14,6 +14,7 @@ from . import config
 from .api import (
     routes_admin,
     routes_articles,
+    routes_discovery,
     routes_pages,
     routes_pillars,
     routes_prompts,
@@ -84,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_stats.router)
     app.include_router(routes_viral_samples.router)
     app.include_router(routes_pillars.router)
+    app.include_router(routes_discovery.router)
     app.include_router(routes_pages.router)
 
     @app.get("/static/assets/{article_id}/{filename:path}", include_in_schema=False)

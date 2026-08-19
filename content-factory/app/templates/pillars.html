@@ -30,37 +30,94 @@
 <form id="pillar-form">
 <label>栏目名称（如：本周5个值得装的AI工具）</label><input name="name" required>
 <label>固定角度 / 结构说明（每期复用，喂生成提示词）</label><textarea name="angle" rows="3"></textarea>
-<label>关联领域（从词表选：决定素材入库过滤与标签候选）</label><select name="domain" id="domain-select">{% for d in domains %}<option value="{{ d }}"{% if loop.first %} selected{% endif %}>{{ d }}</option>{% endfor %}</select>
+<label>关联领域（官方类目可获取推荐词/对标账号；决定素材入库过滤与标签候选）</label><select name="domain" id="domain-select">
+<optgroup label="自定义领域（词表已有）">{% for d in custom_domains %}<option value="{{ d }}"{% if loop.first %} selected{% endif %}>{{ d }}</option>{% endfor %}</optgroup>
+<optgroup label="官方类目（小红书 24 类）">{% for c in official_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</optgroup>
+</select>
 <label>每周期数（1=周更固定档，2-7=多期轮换）</label><input name="slots_per_week" type="number" min="1" max="7" value="1">
 <label>采样关键词池（逗号分隔；点下方推荐词直接加入，也可手填）</label><input name="keywords" placeholder="AI工具,AIGC">
 <div class="actions" id="kw-chips"></div>
+<div id="idea-notes" class="muted"></div>
+<div class="actions"><button type="button" class="secondary" id="btn-accounts" onclick="fetchAccounts(this)">找对标账号（调 RedFox）</button></div>
+<div id="benchmark-accounts" class="muted"></div>
 <p><button>创建栏目</button></p>
 <p class="muted" id="create-status">创建后自动对该栏目的关键词发起一轮采样（RedFox 按调用计费，约每个关键词 1 次调用），完成后即可排期。</p>
 </form></div>
 <script>
 const DOMAINS = {{ domains | tojson }};
-function renderKwChips() {
-  const box = document.getElementById('kw-chips');
-  const input = document.querySelector('#pillar-form [name=keywords]');
-  const current = input.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-  box.innerHTML = '';
-  (DOMAINS[document.getElementById('domain-select').value] || []).forEach(kw => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'secondary';
-    b.textContent = current.includes(kw) ? '✓ ' + kw : kw;
-    b.onclick = () => {
-      const kws = input.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-      const i = kws.indexOf(kw);
-      if (i >= 0) kws.splice(i, 1); else kws.push(kw);
-      input.value = kws.join(',');
-      renderKwChips();
-    };
-    box.appendChild(b);
-  });
+const OFFICIAL = new Set({{ official_categories | tojson }});
+const IDEAS = {};    // 官方类目 → {keywords, notes}（获取推荐词后填充）
+function _kwInput() { return document.querySelector('#pillar-form [name=keywords]'); }
+function _currentKws() { return _kwInput().value.split(/[,，]/).map(s => s.trim()).filter(Boolean); }
+function _toggleKw(kw) {
+  const kws = _currentKws();
+  const i = kws.indexOf(kw);
+  if (i >= 0) kws.splice(i, 1); else kws.push(kw);
+  _kwInput().value = kws.join(',');
 }
-document.getElementById('domain-select').addEventListener('change', renderKwChips);
-renderKwChips();
+function _chip(kw) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'secondary';
+  b.textContent = _currentKws().includes(kw) ? '✓ ' + kw : kw;
+  b.onclick = () => { _toggleKw(kw); renderKwArea(); };
+  return b;
+}
+function renderKwArea() {
+  const domain = document.getElementById('domain-select').value;
+  const box = document.getElementById('kw-chips');
+  const notes = document.getElementById('idea-notes');
+  box.innerHTML = ''; notes.innerHTML = '';
+  if (OFFICIAL.has(domain)) {
+    const ideas = IDEAS[domain];
+    if (!ideas) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = '获取推荐词（调 RedFox 七日爆款，1 次调用）';
+      b.onclick = () => fetchIdeas(b);
+      box.appendChild(b);
+    } else {
+      ideas.keywords.forEach(kw => box.appendChild(_chip(kw)));
+      if (ideas.notes.length) {
+        notes.innerHTML = '该类目近 7 天爆款示例：' + ideas.notes
+          .map(n => `「${n.title}」（赞 ${n.likes}）`).join('　');
+      }
+      if (!ideas.keywords.length) {
+        notes.innerHTML = '该类目近 7 天暂无爆款数据（榜单每天 19:00 更新），请手动填关键词或换类目。';
+      }
+    }
+  } else {
+    (DOMAINS[domain] || []).forEach(kw => box.appendChild(_chip(kw)));
+  }
+}
+async function fetchIdeas(btn) {
+  const domain = document.getElementById('domain-select').value;
+  btn.disabled = true; btn.textContent = '获取中…（约几秒）';
+  try {
+    const r = await fetch('/api/discovery/keyword-ideas?category=' + encodeURIComponent(domain));
+    const d = await r.json();
+    if (!r.ok) { alert(d.detail || '获取推荐词失败'); return; }
+    IDEAS[domain] = d;
+    renderKwArea();
+  } finally { btn.disabled = false; btn.textContent = '获取推荐词（调 RedFox 七日爆款，1 次调用）'; }
+}
+async function fetchAccounts(btn) {
+  const domain = document.getElementById('domain-select').value;
+  const kw = _currentKws()[0] || domain;
+  const box = document.getElementById('benchmark-accounts');
+  btn.disabled = true; btn.textContent = '搜索中…（约几秒）';
+  try {
+    const r = await fetch('/api/discovery/benchmark-accounts?keyword=' + encodeURIComponent(kw));
+    const d = await r.json();
+    if (!r.ok) { alert(d.detail || '搜索对标账号失败'); return; }
+    box.innerHTML = d.accounts.length
+      ? '对标账号（关键词「' + kw + '」最热）：' + d.accounts
+          .map(a => `${a.name}（粉 ${a.fans}，作品 ${a.works}）${a.desc ? ' — ' + a.desc : ''}`).join('；')
+      : '未搜到相关账号，换个关键词试试。';
+  } finally { btn.disabled = false; btn.textContent = '找对标账号（调 RedFox）'; }
+}
+document.getElementById('domain-select').addEventListener('change', renderKwArea);
+renderKwArea();
 function _payload() {
   const f = new FormData(document.getElementById('pillar-form'));
   return {

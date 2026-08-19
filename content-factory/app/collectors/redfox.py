@@ -27,6 +27,17 @@ logger = logging.getLogger(__name__)
 
 INSIGHT_PATH = "/story/api/xhs/search/search"
 WORK_DETAIL_PATH = "/story/api/xhsUser/queryWorkDetail"
+SEVEN_PATH = "/story/api/cozeSkill/getXhsCozeSkillDataSeven"
+SEARCH_USER_PATH = "/story/api/xhsUser/searchUser"
+
+# 七日爆款接口的官方类目枚举（文档 2026-08-19 拉取；建栏目的领域下拉与
+# 关键词推荐来源）。「综合全部」是查询用通配值，不作为内容领域，排除。
+XHS_CATEGORIES = [
+    "学习教育", "职业发展", "星座情感", "数码科技", "化妆美容", "时尚穿搭",
+    "旅行度假", "亲子育儿", "美味佳肴", "宠物天地", "居家装修", "医疗保健",
+    "个人护理", "体育锻炼", "影视娱乐", "休闲爱好", "拍摄记录", "婚庆婚礼",
+    "新闻资讯", "科学探索", "潮流鞋包", "出行代步", "日常生活", "综合杂项",
+]
 
 
 class RedFoxError(RuntimeError):
@@ -77,6 +88,24 @@ def _post(path: str, payload: dict):
     try:
         with httpx.Client(timeout=config.REDFOX_TIMEOUT_SECONDS) as client:
             resp = client.post(f"{config.REDFOX_BASE_URL}{path}", json=payload, headers=headers)
+    except httpx.HTTPError as exc:
+        raise RedFoxError(f"{path} 网络错误：{exc}") from exc
+    if resp.status_code in (401, 403):
+        raise RedFoxError(f"{path} 鉴权失败（HTTP {resp.status_code}）：检查 REDFOX_API_KEY 有效性与余额")
+    if resp.status_code >= 400:
+        raise RedFoxError(f"{path} HTTP {resp.status_code}：{resp.text[:200]}")
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise RedFoxError(f"{path} 响应非 JSON：{resp.text[:200]}") from exc
+
+
+def _get(path: str, params: dict):
+    """GET 版请求（七日爆款等查询接口），鉴权/错误处理与 _post 一致。"""
+    headers = {"REDFOX_API_KEY": config.REDFOX_API_KEY}
+    try:
+        with httpx.Client(timeout=config.REDFOX_TIMEOUT_SECONDS) as client:
+            resp = client.get(f"{config.REDFOX_BASE_URL}{path}", params=params, headers=headers)
     except httpx.HTTPError as exc:
         raise RedFoxError(f"{path} 网络错误：{exc}") from exc
     if resp.status_code in (401, 403):
@@ -141,6 +170,44 @@ def parse_articles(articles: list[dict]) -> list[HotItem]:
 def search_hot_items(keyword: str) -> list[HotItem]:
     """主入口：洞察搜索 + 归一化，供 xhs_sample 优先调用。"""
     return parse_articles(search_articles(keyword))
+
+
+def seven_day_hot(category: str = "综合全部", rank_date: str | None = None) -> list[dict]:
+    """七日爆款笔记：按官方类目拉最近 7 天的爆款榜（每天 19:00 更新昨日榜）。
+
+    供建栏目的关键词推荐（标题/正文 hashtag 词频）与对标参考，不直接入库。
+    实测（2026-08-19）：19 点前昨日榜尚未生成（返回空列表），自动回退取
+    前天；显式指定 rank_date 时不回退。
+    """
+    def fetch_once(day: str | None) -> list[dict]:
+        params = {"category": category}
+        if day:
+            params["rankDate"] = day
+        data = _unwrap(_get(SEVEN_PATH, params), "七日爆款")
+        if not isinstance(data, list):
+            raise RedFoxError(f"七日爆款响应缺少 data 列表：{str(data)[:200]}")
+        return [note for note in data if isinstance(note, dict)]
+
+    if rank_date:
+        return fetch_once(rank_date)
+    for days_ago in (1, 2):
+        notes = fetch_once((date.today() - timedelta(days=days_ago)).isoformat())
+        if notes:
+            return notes
+    return []
+
+
+def search_accounts(keyword: str, offset: int = 0, sort_type: str = "_4") -> list[dict]:
+    """按关键词搜小红书账号（优质库）：建栏目的对标账号参考。
+
+    sortType：_0 相关性 / _2 最新 / _4 最热（红狐指数），默认最热。
+    """
+    payload = {"keyword": keyword, "offset": offset, "sortType": sort_type}
+    data = _unwrap(_post(SEARCH_USER_PATH, payload), "账号搜索")
+    rows = data.get("list") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        raise RedFoxError(f"账号搜索响应缺少 list 列表：{str(data)[:200]}")
+    return [account for account in rows if isinstance(account, dict)]
 
 
 def work_detail(work_id: str = "", work_link: str = "") -> dict:
