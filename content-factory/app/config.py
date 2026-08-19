@@ -108,7 +108,8 @@ XHS_TEARDOWN_HOUR = int(os.environ.get("CF_XHS_TEARDOWN_HOUR", "6"))
 # 无 Key 或调用失败自动降级 xiaohongshu-mcp。接口文档见仓库外 redfox-api文档/
 REDFOX_API_KEY = (os.environ.get("CF_REDFOX_API_KEY") or os.environ.get("REDFOX_API_KEY") or "").strip()
 REDFOX_BASE_URL = os.environ.get("CF_REDFOX_BASE_URL", "https://redfox.hk").rstrip("/")
-REDFOX_TIMEOUT_SECONDS = int(os.environ.get("CF_REDFOX_TIMEOUT", "30"))
+# 搜索接口实测可达 30-60s（慢于旧默认 30s 会被客户端掐断，且紧随的重发易触发网关 502）
+REDFOX_TIMEOUT_SECONDS = int(os.environ.get("CF_REDFOX_TIMEOUT", "90"))
 REDFOX_WINDOW_DAYS = int(os.environ.get("CF_REDFOX_WINDOW_DAYS", "7"))
 
 # ---- 运行开关 ----
