@@ -32,7 +32,14 @@ from app import config  # noqa: E402
 _TMP = Path(tempfile.mkdtemp(prefix="p5_check_"))
 config.DB_PATH = _TMP / "app.db"
 config.BACKUP_DIR = _TMP / "backups"
-config.DOMAINS_FILE = PROJECT_ROOT / "tests" / "fixtures" / "domains.test.yml"
+# 词表用 fixture 的临时副本：建栏目会往词表登记领域/关键词（P5d2），
+# 写共享 fixture 会污染精确断言依赖的种子内容
+_DOMAINS_TMP = _TMP / "domains.yml"
+_DOMAINS_TMP.write_text(
+    (PROJECT_ROOT / "tests" / "fixtures" / "domains.test.yml").read_text(encoding="utf-8"),
+    encoding="utf-8",
+)
+config.DOMAINS_FILE = _DOMAINS_TMP
 config.RUN_SCHEDULER = False
 config.NOTIFY_WEBHOOK = ""
 config.XHS_SAMPLE_KEYWORDS = []  # 走栏目关键词池分支
