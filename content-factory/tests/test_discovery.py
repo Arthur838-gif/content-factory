@@ -5,10 +5,10 @@
   1. RedFox 新接口封装：七日爆款（GET/包装解包/形状校验）+ 账号搜索（list 提取）
   2. 关键词挖掘：hashtag 词频排序；hashtag 不足时标题二元组补位
   3. category_insights 缓存：同类目第二次调用不再打 RedFox（不重复计费）
-  4. register_domain：新领域登记 / 已有领域只追加缺失词 / 无变化不写盘
+  4. 领域词表（P-2 入库）：种子导入 + 官方 24 类目登记 + upsert 合并语义 + 幂等
   5. API：/api/discovery/categories（官方 24 类 + 自定义分组）、
      keyword-ideas、benchmark-accounts；未配 Key 时 503 明确告知
-  6. 建栏目自动注册：官方类目 + 栏目关键词进词表（入库过滤可命中）；
+  6. 建栏目自动注册：官方类目 + 栏目关键词合并入库（入库过滤可命中）；
      自定义领域不动词表
 
 运行：.venv/Scripts/python tests/test_discovery.py
@@ -81,6 +81,12 @@ def main() -> int:
         "domains:\n  AI与编程:\n    keywords: [AI, 编程]\n", encoding="utf-8"
     )
     init_db()
+    from _support import seed_domains_from  # noqa: E402
+
+    stats = seed_domains_from(config.DOMAINS_FILE)
+    check("种子导入：YAML 1 域入库 + 官方 24 类目登记",
+          stats["domains_created"] == 1 and stats["officials_registered"] == 24,
+          f"domains_total={stats['domains_total']}")
     client = TestClient(app)
 
     print("\n[1] RedFox 新接口封装")
@@ -132,23 +138,35 @@ def main() -> int:
         redfox.seven_day_hot = real_seven
         xhs_discovery._CACHE.clear()
 
-    print("\n[4] register_domain 词表登记")
+    print("\n[4] 领域词表登记（P-2 数据库）")
     wrote = radar.register_domain("学习教育", ["考研", "考研英语"])
-    check("新领域登记写入", wrote and "学习教育" in radar.load_domains())
+    check("官方类目已有领域行 → 追加关键词（不重复建行）",
+          wrote and "学习教育" in radar.load_domains())
     wrote2 = radar.register_domain("学习教育", ["考研"])  # 全是已有词
-    check("无新词不写盘", not wrote2)
+    check("无新词不写库", not wrote2)
     wrote3 = radar.register_domain("学习教育", ["考研", "四六级"])
     domains = radar.load_domains()
     check("已有领域只追加缺失词（顺序保持）",
           wrote3 and domains["学习教育"] == ["考研", "考研英语", "四六级"], str(domains.get("学习教育")))
+    wrote_new = radar.register_domain("职场成长", ["跳槽"])
+    check("全新自定义领域 → 建行并登记", wrote_new and radar.load_domains().get("职场成长") == ["跳槽"])
     check("原有领域不受影响", domains["AI与编程"] == ["AI", "编程"])
+    from app.db import session_scope  # noqa: E402
+    from app.services import domain_service  # noqa: E402
+
+    with session_scope() as session:
+        repeat = domain_service.seed_domains(session, config.DOMAINS_FILE)
+    check("种子重复导入幂等（不新增不重复）",
+          repeat["domains_created"] == 0 and repeat["keywords_added"] == 0
+          and repeat["officials_registered"] == 0, str(repeat))
 
     print("\n[5] /api/discovery 端点")
     r_cat = client.get("/api/discovery/categories")
     body = r_cat.json()
     check("categories：官方 24 类 + 自定义分组排除官方",
           r_cat.status_code == 200 and len(body["official"]) == 24
-          and "学习教育" in body["official"] and body["custom"] == ["AI与编程"], str(body["custom"]))
+          and "学习教育" in body["official"]
+          and body["custom"] == ["AI与编程", "职场成长"], str(body["custom"]))
     real_seven = redfox.seven_day_hot
     redfox.seven_day_hot = lambda category: _SEVEN_WRAPPED["data"]
     try:

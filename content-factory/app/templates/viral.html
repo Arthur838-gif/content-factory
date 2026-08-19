@@ -7,8 +7,23 @@
 {% for state in states %}<tr><td>{{ labels.get(state.name, state.name) }}<br><span class="muted">{{ state.name }}</span></td><td><span class="badge {{ 'failed' if state.status == 'open' else 'ready' }}">{{ '熔断' if state.status == 'open' else '正常' }}</span></td><td>{{ state.consecutive_failures }}</td><td><span class="muted">{{ (state.last_error or '')[:160] }}</span></td>
 <td><div class="actions"><button onclick="runCollector('{{ state.name }}')">立即采样</button><button class="secondary" onclick="resumeCollector('{{ state.name }}')">解除熔断</button></div></td></tr>{% endfor %}
 </tbody></table>
-<p class="actions"><button class="secondary" onclick="runCollector('xhs_sample')">手动采样一轮（xhs_sample）</button><button class="secondary" onclick="runTeardown()">立即周度拆解（调试）</button></p>
+<p class="actions"><button class="secondary" onclick="runSampleJob()">手动采样一轮（xhs_sample，入队执行）</button><button class="secondary" onclick="runTeardown()">立即周度拆解（调试）</button></p>
 <p class="muted" id="collector-msg"></p></div>
+
+<div class="card"><h3>采样任务</h3>
+<p class="muted">任务持久化落库：排队 → 运行（逐关键词提交进度）→ 终态；服务重启后排队任务继续执行，超时任务按租约自动回收。付费采样全部在这里排队执行，API 进程不联网。</p>
+{% if recent_jobs %}<table><thead><tr><th>#</th><th>来源</th><th>状态</th><th>进度</th><th>抓取 / 入库</th><th>爆款</th><th>发起时间</th><th>操作</th></tr></thead><tbody>
+{% for j in recent_jobs %}<tr>
+<td>{{ j.id }}</td>
+<td>{{ {'pillar': '栏目自动', 'manual': '手动', 'scheduled': '定时'}.get(j.kind, j.kind) }}{% if j.pillar_id %}（栏目 {{ j.pillar_id }}）{% endif %}</td>
+<td><span class="badge {{ {'queued': '', 'running': '', 'succeeded': 'ready', 'succeeded_empty': 'ready', 'failed': 'failed', 'blocked': 'failed', 'canceled': 'archived'}.get(j.status, '') }}">{{ {'queued': '排队中', 'running': '运行中', 'succeeded': '成功', 'succeeded_empty': '成功（空）', 'failed': '失败', 'blocked': '熔断拦截', 'canceled': '已取消'}.get(j.status, j.status) }}</span>{% if j.error_type %}<br><span class="muted">{{ j.error_type }}{% if j.error %}：{{ j.error[:80] }}{% endif %}</span>{% endif %}</td>
+<td>{{ j.completed_queries }}/{{ j.total_queries }}{% if j.status == 'running' and j.current_keyword %}<br><span class="muted">当前：{{ j.current_keyword }}</span>{% endif %}</td>
+<td>{{ j.fetched }} / {{ j.inserted }}</td>
+<td>{{ j.viral_created }}</td>
+<td class="muted">{{ j.requested_at }}</td>
+<td><div class="actions">{% if j.status == 'queued' %}<button class="secondary" onclick="cancelJob({{ j.id }})">取消</button>{% elif j.status in ('failed', 'blocked', 'canceled', 'succeeded_empty') %}<button class="secondary" onclick="retryJob({{ j.id }})">重试</button>{% endif %}</div></td>
+</tr>{% endfor %}
+</tbody></table>{% else %}<p class="muted">暂无任务；点上方「手动采样一轮」或到 <a href="/pillars">内容栏目</a> 建栏目自动采样。</p>{% endif %}</div>
 
 <div class="card"><h3>人工喂样本（降级模式入口）</h3>
 <p class="muted">采样拿不到粉丝数时，在此补齐笔记链接与互动数据；录入后与机器采样走同一打分、落库、撞题与建题管线。</p>
@@ -36,7 +51,54 @@
 
 <script>
 async function post(url, body) { const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {method:'POST'}; const r = await fetch(url, opt); const d = await r.json().catch(() => ({})); return {ok: r.ok, status: r.status, data: d}; }
-async function runCollector(name) { const {ok, status, data} = await post(`/api/collectors/${name}/run`); document.getElementById('collector-msg').textContent = ok ? `采样完成：入库 ${data.inserted} 条，新增爆款 ${data.viral_created ?? 0} 条` : `失败（${status}）：${data.detail || ''}`; if (ok) location.reload(); }
+const JOB_STATUS = {queued: '排队中', running: '运行中', succeeded: '成功', succeeded_empty: '成功（空结果）', failed: '失败', blocked: '被熔断拦截', canceled: '已取消'};
+function _jobLine(j) {
+  let s = `任务 #${j.id} ${JOB_STATUS[j.status] || j.status}：${j.completed_queries}/${j.total_queries} 个关键词`;
+  if (j.status === 'running' && j.current_keyword) s += `（当前：${j.current_keyword}）`;
+  if (j.fetched || j.inserted) s += `，抓取 ${j.fetched} 条 / 入库 ${j.inserted} 条`;
+  return s;
+}
+async function runCollector(name) {
+  if (name === 'xhs_sample') { await runSampleJob(); return; }
+  const {ok, status, data} = await post(`/api/collectors/${name}/run`);
+  document.getElementById('collector-msg').textContent = ok ? `采样完成：入库 ${data.inserted} 条，新增爆款 ${data.viral_created ?? 0} 条` : `失败（${status}）：${data.detail || ''}`;
+  if (ok) location.reload();
+}
+async function runSampleJob() {
+  const msg = document.getElementById('collector-msg');
+  const {ok, status, data} = await post('/api/sampling/jobs', {collector: 'xhs_sample'});
+  if (!ok) { msg.textContent = `入队失败（${status}）：${data.detail || ''}`; return; }
+  if (!data.created) { msg.textContent = `已有采样任务在排队/运行（${_jobLine(data.job)}），不重复计费。`; return; }
+  await pollJob(data.job.id, msg);
+}
+async function pollJob(jobId, msg) {
+  // 终态即停；连续 2 分钟没变化也停（任务落库，可回本页或刷新看结果）
+  for (let i = 0; i < 60; i++) {
+    await new Promise(res => setTimeout(res, 2000));
+    let j = null;
+    try { const r = await fetch(`/api/sampling/jobs/${jobId}`); if (r.ok) j = await r.json(); } catch (_) {}
+    if (!j) { msg.textContent = `任务 #${jobId} 查询失败，稍后刷新本页查看。`; return; }
+    if (j.status === 'queued' || j.status === 'running') { msg.textContent = _jobLine(j) + '…'; continue; }
+    let summary = _jobLine(j);
+    if (j.status === 'succeeded' && j.viral_created) summary += `，新增爆款 ${j.viral_created} 条`;
+    if ((j.meta || {}).degraded_keywords && j.meta.degraded_keywords.length) summary += `（RedFox 失败降级 mcp：${j.meta.degraded_keywords.length} 个词）`;
+    if (j.status === 'failed') summary += `（${j.error_type || '异常'}：${(j.error || '').slice(0, 120)}）`;
+    if (j.status === 'blocked') summary += '；先解除熔断再点「重试」';
+    msg.textContent = summary;
+    await new Promise(res => setTimeout(res, 1500));
+    location.reload();
+    return;
+  }
+  msg.textContent = `任务 #${jobId} 仍在执行（长任务可稍后刷新本页查看）。`;
+}
+async function cancelJob(id) {
+  const {ok, status, data} = await post(`/api/sampling/jobs/${id}/cancel`);
+  if (ok) location.reload(); else alert(`取消失败（${status}）：${data.detail || ''}`);
+}
+async function retryJob(id) {
+  const {ok, status, data} = await post(`/api/sampling/jobs/${id}/retry`);
+  if (ok) location.reload(); else alert(`重试失败（${status}）：${data.detail || ''}`);
+}
 async function resumeCollector(name) { const {ok, status, data} = await post(`/api/admin/collectors/${name}/resume`); document.getElementById('collector-msg').textContent = ok ? `${name} 已恢复` : `失败（${status}）：${data.detail || ''}`; if (ok) location.reload(); }
 async function runTeardown() { const {ok, status, data} = await post('/api/collectors/xhs_teardown/run'); document.getElementById('collector-msg').textContent = ok ? `拆解完成：样本 ${data.samples} 条，结论回写 ${data.reasons_updated} 条` : `失败（${status}）：${data.detail || ''}`; if (ok) location.reload(); }
 async function feedSample() {

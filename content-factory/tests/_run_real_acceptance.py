@@ -1,4 +1,12 @@
+"""真实质量验收（调真实 LLM，计费）：生成文章 → 结构 rubric → 预览/素材包。
+
+用法：.venv/Scripts/python tests/_run_real_acceptance.py <输出目录>
+隔离：数据库/素材/备份全部落 <输出目录>，绝不写正式 data/app.db 与 data/assets
+（在导入 app 前用环境变量重定向，config 读 env 优先于 .env）。
+退出码：自动项（生成状态 / rubric / 预览 / 素材包）任一不通过 → 1。
+"""
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -6,15 +14,28 @@ from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
 
-out = Path(sys.argv[1])
-sys.path.insert(0, str(Path.cwd()))
-from fastapi.testclient import TestClient
-from sqlalchemy import select
-from app import config
-from app.db import init_db, session_scope
-from app.main import app
-from app.models import Article, Asset, Topic
-from app.services import prompt_engine
+if len(sys.argv) != 2:
+    print("用法：python tests/_run_real_acceptance.py <输出目录>", file=sys.stderr)
+    raise SystemExit(2)
+out = Path(sys.argv[1]).resolve()
+out.mkdir(parents=True, exist_ok=True)
+# 隔离必须在导入 app 之前：config 在 import 时读环境变量。
+# 只重定向有状态的写入（库/素材/备份）；版式与字体是只读输入，仍用仓库内 data/。
+os.environ["CF_DB_PATH"] = str(out / "app.db")
+os.environ["CF_ASSETS_DIR"] = str(out / "assets")
+os.environ["CF_BACKUP_DIR"] = str(out / "backups")
+os.environ["RUN_SCHEDULER"] = "0"
+os.environ["CF_WORKER_EMBEDDED"] = "0"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+
+from app import config  # noqa: E402
+from app.db import init_db, session_scope  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import Article, Asset, Topic  # noqa: E402
+from app.services import prompt_engine  # noqa: E402
 
 report = {"run_at": datetime.now().isoformat(timespec="seconds"), "environment": {"model": config.MODEL_NAME, "base_url": config.OPENAI_BASE_URL, "mock": config.LLM_MOCK, "db": str(config.DB_PATH), "assets": str(config.ASSETS_DIR)}, "results": {}, "manual_review": []}
 
@@ -105,6 +126,24 @@ if ready:
     p3.update({"preview_status": page.status_code, "preview_has_title": ready["article"]["title"] in page.text, "preview_has_copy_buttons": page.text.count("复制") >= 3, "package_status": package.status_code, "package_content_type": package.headers.get("content-type"), "zip_names": zip_names, "zip_text": zip_content, "static_assets": static_checks})
 report["results"]["p3_real_preview_and_package"] = p3
 report["manual_review"] = ["P1：人工检查三篇真实小红书文案的说服力、实操价值与内容质量。", "P2：人工检查图片中文显示、层级、边距、换行、截断与溢出。", "P3：浏览器打开真实预览页，复制并保存素材，在小红书 App 手动发布并计时，目标不超过 2 分钟。", "成本：usage.cost_est 仍按默认 DeepSeek 单价估算，未配置 GLM 官方价格。"]
+
+# 自动项判定：生成状态 / 结构 rubric / 预览与素材包，任一不通过 → 非零退出
+failures: list[str] = []
+wechat_report = report["results"]["p0_real_wechat"]
+if wechat_report.get("http_status") != 200 or wechat_report.get("article", {}).get("status") != "ready":
+    failures.append(f"P0 公众号文章未就绪（HTTP {wechat_report.get('http_status')}，状态 {wechat_report.get('article', {}).get('status')}）")
+for i, item in enumerate(xhs_runs, 1):
+    article = item.get("article") or {}
+    rubric = article.get("rubric") or {}
+    if item.get("http_status") != 200 or article.get("status") != "ready":
+        failures.append(f"P1/P2 小红书样本 {i} 未就绪（HTTP {item.get('http_status')}，状态 {article.get('status')}）")
+    elif article.get("rubric_pass_count") != len(rubric):
+        failed_items = [k for k, v in rubric.items() if not v]
+        failures.append(f"P1/P2 小红书样本 {i} 结构项 {article.get('rubric_pass_count')}/{len(rubric)}（未过：{'、'.join(failed_items)}）")
+if p3.get("preview_status") != 200 or p3.get("package_status") != 200:
+    failures.append(f"P3 预览/素材包不可用（HTTP {p3.get('preview_status')} / {p3.get('package_status')}）")
+report["failures"] = failures
+
 save()
 lines = ["# GLM-4.7 真实质量验收结果", "", f"- 执行时间：{report['run_at']}", f"- 模型：{config.MODEL_NAME}", "- 运行隔离：临时 SQLite 与素材目录，未修改正式 data/app.db。", "", "## 自动结果", "", f"- P0 WeChat：HTTP {wechat_response.status_code}，状态 `{report['results']['p0_real_wechat']['article']['status']}`。"]
 usage = report["results"]["p0_real_wechat"]["article"].get("usage") or {}
@@ -114,4 +153,10 @@ for i, item in enumerate(xhs_runs, 1):
     lines.append(f"- P1/P2 小红书样本 {i}：" + (f"文章 #{a['id']}，HTTP {item['http_status']}，状态 `{a['status']}`，自动结构项 {a['rubric_pass_count']}/{len(a['rubric'])} 通过。" if a else f"HTTP {item['http_status']}，未取得文章记录。"))
 lines += [f"- P3 真实预览：页面 HTTP {p3.get('preview_status')}，素材包 HTTP {p3.get('package_status')}，ZIP 文件数 {len(p3.get('zip_names', []))}。", "", "## 产物位置", "", "- 机器可读结果：`acceptance-result.json`", "- 小红书图片：`assets/<文章ID>/`", "- 隔离数据库：`app.db`", "", "## 尚需人工验收", ""] + [f"- {x}" for x in report["manual_review"]]
 (out / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-print(json.dumps({"report": str(out / "README.md"), "result": str(out / "acceptance-result.json"), "p0_status": report["results"]["p0_real_wechat"]["article"]["status"], "xhs": [{"id": x.get("article", {}).get("id"), "status": x.get("article", {}).get("status"), "score": x.get("article", {}).get("rubric_pass_count")} for x in xhs_runs], "p3": p3}, ensure_ascii=False, default=str))
+print(json.dumps({"report": str(out / "README.md"), "result": str(out / "acceptance-result.json"), "p0_status": report["results"]["p0_real_wechat"]["article"]["status"], "xhs": [{"id": x.get("article", {}).get("id"), "status": x.get("article", {}).get("status"), "score": x.get("article", {}).get("rubric_pass_count")} for x in xhs_runs], "p3": p3, "failures": failures}, ensure_ascii=False, default=str))
+if failures:
+    print("FAIL：真实验收自动项未通过")
+    for line in failures:
+        print(f"  ✗ {line}")
+    raise SystemExit(1)
+print("PASS：真实验收自动项全部通过（人工项见 README）")

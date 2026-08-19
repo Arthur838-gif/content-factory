@@ -9,7 +9,7 @@ from ..db import session_scope
 from ..models import HotItem as HotItemORM
 from ..models import ViralSample
 from ..schemas import ManualSampleInput
-from ..services import radar
+from ..services import domain_service, radar
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def create_manual_sample(payload: ManualSampleInput) -> dict:
                 status_code=409, detail=f"该笔记 URL 已入库，不重复录入（{payload.url}）"
             ) from exc
 
-        matched = radar.match_domain(payload.title)
+        matched = domain_service.match_domain(payload.title, session=session)
         keyword = matched[1] if matched else "manual"
         outcome = radar.process_xhs_item(session, row, payload.domain, keyword, auto=False)
         result = {

@@ -1,7 +1,8 @@
 # content-factory · 双端内容工厂
 
 公众号 + 小红书双端矩阵内容系统。上游事实来源：《双端内容工厂 · 开发计划书 v1.3》。
-本仓库当前进度：**P4 数据飞轮**（发布回填 → 评分 → 报表的闭环；P0-P3 文本/出图/素材包链路、P-1b 低粉爆款引擎均已就绪）。
+本仓库当前进度：**P-2 长期运行基础设施**（领域词表入库、持久化采样任务 + 可恢复 worker、
+Alembic 迁移、pytest/CI）；此前 P0-P4 文本/出图/素材包/数据飞轮、P-1b 低粉爆款引擎均已就绪。
 
 > P-1a 已完成：8 表建表、采集/调度/备份/告警/雷达分析就位，`topics` 表有 radar 选题可供生成测试。
 
@@ -95,6 +96,88 @@
    恢复服务后仍需 `POST /api/admin/collectors/xhs_sample/resume` 显式解除。
 5. 采样期间严禁任何关注、点赞、评论、私信、回关、发布操作。
 
+## P-2 长期运行基础设施（领域词表入库 + 持久化采样任务 + 迁移/测试）
+
+把"单进程本地工具"升级为可长期运行、可恢复、便于多人继续扩展的结构。
+
+### 数据库迁移（Alembic）
+
+- schema 变更一律走 `migrations/`（版本文件是冻结 DDL，不随模型漂移）；启动时
+  `init_db()` 自动做迁移引导：空库全量升级；create_all 时代的旧库先自动备份
+  （`data/backups/pre_migrate_*.db`，不参与每日备份轮换、永久保留）再 stamp 基线
+  后增量升级；已是 head 则幂等直返。
+- 手动命令（Git Bash，在 `content-factory/` 下）：
+
+```bash
+.venv/Scripts/python -m alembic -x db=data/app.db upgrade head   # 升级到最新
+.venv/Scripts/python -m alembic -x db=data/app.db current        # 查看当前版本
+.venv/Scripts/python -m alembic revision -m "变更说明"            # 新增空版本脚本
+```
+
+### 领域词表（数据库为唯一事实源）
+
+- `domains` / `domain_keywords` 两表（名称唯一、领域内关键词唯一、ordering 编码
+  匹配优先级：自定义领域 10+，官方 24 类目 1000+，多领域命中取先声明者）。
+- `data/domains.yml` 只作首次导入的种子（启动幂等导入，之后不再读不写）；运行时
+  改词表走 API：`GET/POST /api/domains`、`POST /api/domains/{name}/keywords`、
+  `PUT /api/domains/{name}/enabled`。建栏目时"领域登记 + 关键词登记 + 栏目插入"
+  在同一事务，历史 `topics.domain` / `pillars.domain` 仍是字符串快照不加外键。
+
+### 持久化采样任务与 worker
+
+- `sampling_jobs` 表：queued → running → succeeded / succeeded_empty（全关键词无结果，
+  合法不熔断）/ failed / blocked（领取时熔断）/ canceled。逐关键词提交进度
+  （计数器 / 当前词 / 心跳 / 租约），素材入库与进度同一事务，崩溃最多丢当前词。
+- **API 进程不再执行付费网络请求**：`POST /api/sampling/jobs` 入队即返回 202 +
+  job_id；`POST /api/collectors/xhs_sample/run` 兼容改为入队；APScheduler 的
+  xhs 定时任务只入队。任务查询 / 取消（仅 queued）/ 重试（终态保留进度续跑）
+  见 `/api/sampling/jobs` 系列端点，`/viral` 页有任务列表与进度。
+- 去重与重试规则：同一来源的活跃任务只允许一个（`pillar:{id}` / `manual:xhs_sample` /
+  `scheduled:xhs_sample` 去重键，连点不重复计费）；任务失败计入熔断计数（与同步
+  路径同语义）；租约超时的 running 任务自动回队续跑，尝试次数用尽判失败。
+- 运行方式：
+
+```bash
+# 单机开发（默认）：API 进程内嵌 worker 线程，一条命令全跑
+.venv/Scripts/uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+# 长期/多人部署：API 与 worker 分进程（先在 .env 设 CF_WORKER_EMBEDDED=0）
+.venv/Scripts/uvicorn app.main:app --host 127.0.0.1 --port 8000   # 进程 1：API
+.venv/Scripts/python -m app.services.worker                       # 进程 2（可多个）：worker
+.venv/Scripts/python -m app.services.worker --once                # 补跑一个任务即退出（调试）
+```
+
+worker 领取是条件 UPDATE，多 worker 进程不会重复执行同一任务；相关开关：
+`CF_WORKER_EMBEDDED` / `CF_WORKER_POLL_SECONDS` / `CF_WORKER_JOB_LEASE_SECONDS` /
+`CF_WORKER_JOB_MAX_ATTEMPTS`。
+
+### SQLite 边界与部署注意
+
+- SQLite（WAL + busy timeout 30s）适合本机/小团队低并发写；API + worker 分进程、
+  每日备份的现状在几十次写/分钟内没有压力。出现 `database is locked` 常态化、
+  多机访问或要并发 worker 数 > 4 时，迁 PostgreSQL（SQLAlchemy 换连接串 + 迁移链
+  重写为 PostgreSQL 方言，业务代码不动）。
+- 当前只绑 `127.0.0.1`，Host/Origin 白名单只防 DNS rebinding 与跨站写，**不是
+  用户认证**：暴露到局域网/公网前必须先加认证（反向代理 Basic Auth 或接入登录），
+  否则任何人可触发付费采样与删除数据。
+- RedFox 按调用计费：一次手动/定时采样 ≈ 关键词数 次调用（每词最多 1 次 RedFox、
+  失败降级 mcp 不重复计费）；任务去重与熔断是主要的防误触机制，`CF_XHS_SAMPLE_SCHEDULED=false`
+  可完全关闭定时采样只留手动。
+
+### 测试与 CI
+
+```bash
+.venv/Scripts/python -m pytest tests -q      # 正式用例：迁移/领域/采样任务/lifespan/安全渲染
+.venv/Scripts/python tests/run_all.py        # 全量离线回归（pytest + 12 个验收脚本），任一失败非零退出
+.venv/Scripts/python tests/_run_real_acceptance.py <输出目录>   # 真实 LLM 质量验收（计费，手动）
+```
+
+- GitHub Actions（`.github/workflows/tests.yml`）：装依赖 → `alembic upgrade head`
+  空库升级 → pytest → `run_all.py`。全程离线（LLM mock / RedFox 桩 / 本地 mock mcp），
+  不消耗任何付费 API；真实 RedFox/LLM 验收保持显式手动。
+- `run_all.py` 覆盖的验收脚本各自用临时库隔离，绝不写 `data/app.db`；
+  `_run_real_acceptance.py` 的数据库/素材/备份全部重定向到输出目录。
+
 ## P3 管理页与素材包
 
 启动服务后访问 `http://127.0.0.1:8000/` 进入选题台，`/articles/{id}` 查看文章预览与图片，`/prompts` 管理模板版本。小红书 ready 文章可从预览页下载素材包；ZIP 内含 `title.txt`、`content.txt` 与按上传顺序编号的 `images/NN_kind.png`。发布链接和阅读/点赞/收藏等指标可在预览页回填，记录追加保存且文章进入 `published` 状态。
@@ -122,12 +205,21 @@
 ## 快速开始
 
 ```bash
-python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env          # 按需改 RSSHUB_BASE_URL / NOTIFY_WEBHOOK
+python -m venv .venv
+# Windows（Git Bash）：
+.venv/Scripts/pip install -r requirements-dev.txt
+cp .env.example .env              # 按需改 RSSHUB_BASE_URL / NOTIFY_WEBHOOK / LLM / RedFox Key
+.venv/Scripts/uvicorn app.main:app --host 127.0.0.1 --port 8000
+# Linux / macOS：
+.venv/bin/pip install -r requirements-dev.txt
+cp .env.example .env
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-手动触发一次采集（第 8 章调试接口）：
+启动即自动完成：迁移引导（空库建表 / 旧库备份+升级，见「P-2 数据库迁移」）、
+领域词表与提示词种子幂等导入、定时任务（`RUN_SCHEDULER=0` 可关）、内嵌采样 worker。
+
+手动触发一次采集（第 8 章调试接口；xhs_sample 返回 202 + 任务 id，进度见 `/viral`）：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/collectors/hotboard/run
@@ -219,7 +311,8 @@ curl --noproxy '*' -X POST "http://127.0.0.1:8000/api/topics/1/generate?platform
 - `NOTIFY_WEBHOOK`：统一告警出口（Server酱兼容 JSON POST）。告警事件（第 7 章）：
   采集器熔断/连续失败、备份失败、清理任务异常等。演练：
   `.venv/bin/python -m app.services.notify WARN test 通道演练 "P-1a 验收"`。
-- `data/domains.yml`：领域关键词表，改词表不改代码；命中才入库并自动建选题。
+- `data/domains.yml`：领域关键词表的种子导入源（P-2 起词表存数据库，运行时改词表
+  走 `/api/domains`，见「P-2 领域词表」）；命中才入库并自动建选题。
 - `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `MODEL_NAME`（P0 起）：产品内 LLM，OpenAI 兼容协议 +
   强制 JSON mode，只依赖这三个环境变量，供应商切换不改代码。**未配置 `OPENAI_API_KEY` 时
   自动走 mock 降级**（返回固定 JSON、`meta.usage.model="mock"`），用于无 Key 跑通链路结构；
@@ -255,7 +348,7 @@ P4 交付 `services/scoring.py`（评分重算 + 模板效果分 + 成本/校准
 | --- | --- | --- |
 | hotboard | 每小时 | 热榜采集（启动即跑一轮） |
 | expire_topics | 每小时 | 到期 radar 选题归档（created_at + 72h） |
-| xhs_sample | 每 6 小时 | 小红书只读采样（M2，P-1b；熔断后跳过，等人工恢复） |
+| xhs_sample | 每 6 小时 | 小红书只读采样入队（M2，P-1b/P-2；P-2 起调度只入队，由 worker 执行；熔断后跳过入队，等人工恢复） |
 | xhs_teardown | 每周一 06:00 | 低粉爆款周度 LLM 拆解（A3，P-1b） |
 | backup | 每日 03:00 | SQLite 备份到 `data/backups/app_YYYYMMDD.db`，保留 7 份 |
 | cleanup | 每周日 05:00 | 物理删除 90 天前的 hot_items（与备份错开 ≥ 1 小时） |

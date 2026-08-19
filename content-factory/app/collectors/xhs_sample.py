@@ -20,7 +20,7 @@ import httpx
 
 from .. import config
 from ..schemas import HotItem
-from ..services import radar
+from ..services import domain_service
 from .base import BaseCollector, register_collector
 from .redfox import RedFoxError, _to_int, enabled as redfox_enabled, probe as redfox_probe, search_hot_items
 
@@ -255,7 +255,7 @@ class XhsSampleCollector(BaseCollector):
     def fetch(self) -> list[HotItem]:
         items: list[HotItem] = []
         for keyword in self._queries():
-            parsed, source = self._fetch_keyword(keyword)
+            parsed, source = self.fetch_keyword(keyword)
             # 记录命中该条的检索词：pillar 排期按标题或采样词匹配（标题未必含关键词）
             for item in parsed:
                 raw = dict(item.raw or {})
@@ -265,8 +265,11 @@ class XhsSampleCollector(BaseCollector):
             items.extend(parsed)
         return items
 
-    def _fetch_keyword(self, keyword: str) -> tuple[list[HotItem], str]:
-        """单关键词采样：RedFox 优先（含 fans），失败降级 mcp search_feeds。"""
+    def fetch_keyword(self, keyword: str) -> tuple[list[HotItem], str]:
+        """单关键词采样（worker 逐词调用，进度可逐词落库）：
+        RedFox 优先（含 fans），失败降级 mcp search_feeds。
+        返回 (条目列表, 数据源 redfox/mcp)。
+        """
         if redfox_enabled():
             try:
                 return search_hot_items(keyword), "redfox"
@@ -293,7 +296,7 @@ class XhsSampleCollector(BaseCollector):
         if keywords:
             return keywords[: config.XHS_SAMPLE_MAX_QUERIES]
         keywords = []
-        for domain_keywords in radar.load_domains().values():
+        for domain_keywords in domain_service.load_domains().values():
             keywords.extend(domain_keywords)
         return keywords[: config.XHS_SAMPLE_MAX_QUERIES]
 

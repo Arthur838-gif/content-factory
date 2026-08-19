@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 
 from ..collectors.redfox import RedFoxError, XHS_CATEGORIES
-from ..services import radar, xhs_discovery
+from ..services import domain_service, xhs_discovery
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,8 @@ router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 
 @router.get("/categories")
 def categories() -> dict:
-    """官方类目（七日爆款枚举）+ 词表里的自定义领域，供表单下拉分组。"""
-    custom = [d for d in radar.load_domains() if d not in XHS_CATEGORIES]
+    """官方类目（七日爆款枚举）+ 库里的自定义领域，供表单下拉分组。"""
+    custom = [d for d in domain_service.load_domains() if d not in XHS_CATEGORIES]
     return {"official": XHS_CATEGORIES, "custom": custom}
 
 

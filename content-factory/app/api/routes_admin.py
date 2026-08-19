@@ -1,13 +1,19 @@
-"""管理接口（P-1a 起）：手动触发采集（计划书第 8 章）；P-1b 增熔断状态与人工恢复。"""
+"""管理接口（P-1a 起）：手动触发采集（计划书第 8 章）；P-1b 增熔断状态与人工恢复。
+
+P-2 起 xhs_sample 的手动触发改为入队异步执行（202 + job），由 worker 领取；
+API 进程不再执行付费网络请求。hotboard / github_tools 等轻量免费采集器仍同步。
+"""
 import logging
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 from ..collectors import base as collectors_base
 from ..collectors import hotboard  # noqa: F401  注册 hotboard 采集器
 from ..collectors import xhs_sample  # noqa: F401  注册 xhs_sample 采样器（P-1b）
 from ..collectors import github_tools  # noqa: F401  注册 github_tools 采集器（P7）
-from ..services import radar
+from ..collectors.base import circuit_open
+from ..services import radar, sampling_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +28,31 @@ collectors_base.register_manual_task("xhs_teardown", radar.run_weekly_teardown)
 def trigger_collector(name: str):
     """手动触发一次采集（调试用）。name: hotboard / xhs_sample / xhs_teardown。
 
-    409 = 采集器已熔断（需人工恢复）；502 = mcp 等上游失败（失败计数 +1）。
+    xhs_sample 是付费采样，P-2 起只入队：返回 202 + 任务详情，
+    由 worker 领取执行，进度走 /api/sampling/jobs/{id}。
+    其余 name：409 = 采集器已熔断（需人工恢复）；502 = mcp 等上游失败（失败计数 +1）。
     502 detail 只回类型化摘要，不回 repr(exc)——异常文本可能带内部路径/地址。
     """
+    if name == "xhs_sample":
+        if circuit_open(name):
+            raise HTTPException(
+                status_code=409,
+                detail=f"采集器 {name} 已熔断；POST /api/admin/collectors/"
+                f"{name}/resume 显式恢复后再触发",
+            )
+        try:
+            job, created = sampling_jobs.enqueue(kind="manual", collector=name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return JSONResponse(
+            status_code=202,
+            content={
+                "collector": name,
+                "queued": True,
+                "created": created,
+                "job": sampling_jobs.job_dict(job),
+            },
+        )
     task = collectors_base.get_manual_task(name)
     if task is not None:
         try:

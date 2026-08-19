@@ -16,7 +16,7 @@ from .. import config
 from ..db import session_scope
 from ..models import CollectorState, HotItem as HotItemORM
 from ..schemas import CollectorRunResult, HotItem
-from ..services import notify, radar
+from ..services import domain_service, notify, radar
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ def persist_hot_items(session, items: list[HotItem], collector: str = "") -> Col
         ).all()
     )
 
-    domains = radar.load_domains()  # 整批只读一次领域词表，不逐条读盘
+    domains = domain_service.load_domains(session)  # 整批只查一次领域词表（同事务，不另开连接）
     created = merged = filtered_out = inserted = viral_created = 0
     for url, item in batch.items():
         if url in existing:
@@ -214,11 +214,30 @@ def persist_hot_items(session, items: list[HotItem], collector: str = "") -> Col
     )
 
 
+def handle_collector_failure(name: str, exc: Exception) -> bool:
+    """失败计数 +1（达阈值熔断）并外发一次熔断告警；返回是否刚刚熔断。
+
+    run_collector 与 sampling worker 共用：两条执行路径的
+    熔断与告警语义保持一致。
+    """
+    opened = record_failure(name, repr(exc))
+    if opened:
+        # 只在熔断瞬间告警一次；熔断期间不再重试、不再重复告警
+        notify.send_alert(
+            "ERROR", "collector", f"{name} 熔断",
+            f"连续失败 {config.COLLECTOR_CIRCUIT_FAILURES} 次，采集器已暂停，"
+            "需人工检查并通过 POST /api/admin/collectors/"
+            f"{name}/resume 显式恢复",
+        )
+    return opened
+
+
 def run_collector(name: str, collector: BaseCollector | None = None) -> CollectorRunResult:
     """手动/定时触发入口：熔断检查 → 拉取 → 落库。整轮失败计数并熔断。
 
     collector 传预构建实例（定向采样：如新建栏目后只采该栏目的关键词），
-    缺省按注册表构建。
+    缺省按注册表构建。xhs_sample 的异步执行走 sampling_jobs + worker，
+    本入口保留给同步调用方（hotboard / github_tools / 调试）。
     """
     collector = collector or get_collector(name)
     if circuit_open(name):
@@ -227,15 +246,7 @@ def run_collector(name: str, collector: BaseCollector | None = None) -> Collecto
         items = collector.fetch()
     except Exception as exc:  # 整个采集器异常（单源失败已在 fetch 内部消化）
         logger.exception("采集器 %s 执行失败", name)
-        opened = record_failure(name, repr(exc))
-        if opened:
-            # 只在熔断瞬间告警一次；熔断期间不再重试、不再重复告警
-            notify.send_alert(
-                "ERROR", "collector", f"{name} 熔断",
-                f"连续失败 {config.COLLECTOR_CIRCUIT_FAILURES} 次，采集器已暂停，"
-                "需人工检查并通过 POST /api/admin/collectors/"
-                f"{name}/resume 显式恢复",
-            )
+        handle_collector_failure(name, exc)
         raise
     record_success(name)
     with session_scope() as session:

@@ -5,15 +5,16 @@
 """
 import logging
 import shutil
+from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
 
 from .. import config
 from ..db import session_scope
 from ..models import Article, Asset, Pillar, Topic, WeekTheme
-from ..services import pillar as pillar_service
+from ..services import domain_service, pillar as pillar_service, sampling_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,9 @@ router = APIRouter(prefix="/api", tags=["pillars"])
 class PillarIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     angle: str = ""
-    domain: str = ""
+    domain: str = Field("", max_length=64, description="领域名（官方类目可下拉、新领域可手填）")
     slots_per_week: int = Field(1, ge=1, le=7)
-    keywords: list[str] = []
+    keywords: list[Annotated[str, StringConstraints(max_length=64, strip_whitespace=True)]] = []
     active: bool = True
 
 
@@ -49,62 +50,42 @@ def list_pillars() -> list[dict]:
         return [_pillar_dict(p) for p in rows]
 
 
-def _auto_sample_pillar(pillar_id: int) -> None:
-    """新建栏目后对该栏目的关键词池定向采样（后台任务，不阻塞创建响应）。
-
-    走 run_collector 同一管线：熔断同样生效、失败同样计数；采样完成前
-    页面轮询 /api/pillars/{id}/materials 展示进度。
-    """
-    from ..collectors import xhs_sample
-    from ..collectors.base import CircuitOpenError, run_collector
-
-    try:
-        with session_scope() as session:
-            pillar = session.get(Pillar, pillar_id)
-            keywords = list(pillar.keywords or []) if pillar else []
-        if not keywords:
-            return
-        result = run_collector("xhs_sample", collector=xhs_sample.XhsSampleCollector(keywords=keywords))
-        logger.info(
-            "新栏目自动采样完成（pillar=%s）：fetched=%s inserted=%s", pillar_id, result.fetched, result.inserted
-        )
-    except CircuitOpenError as exc:
-        logger.warning("新栏目自动采样被熔断拦截（pillar=%s）：%s", pillar_id, exc)
-    except Exception:
-        # 后台任务异常不冒泡（不影响已创建成功的栏目），熔断告警由 run_collector 负责
-        logger.exception("新栏目自动采样失败（pillar=%s）", pillar_id)
-
-
 @router.post("/pillars", status_code=201)
-def create_pillar(body: PillarIn, background: BackgroundTasks) -> dict:
-    from ..services import radar
-
+def create_pillar(body: PillarIn) -> dict:
+    # 领域登记与栏目插入同一事务（P-2）：词表与栏目要么都落库要么都不落，
+    # 消除 YAML 时代"词表写成功、栏目失败"或反过来的双写不一致。
     # 领域不在词表（官方类目或手填新领域）→ 连同栏目关键词登记，否则
-    # 采集入库时标题命不中任何领域会被整批过滤（每日一句踩过的坑）；
-    # 已有领域只追加缺失关键词，无新词不写盘
-    if body.domain and body.keywords:
-        try:
-            radar.register_domain(body.domain, body.keywords)
-        except Exception:
-            logger.exception("领域词表登记失败（domain=%s）", body.domain)
+    # 采集入库时标题命不中任何领域会被整批过滤（每日一句踩过的坑）。
     with session_scope() as session:
+        if body.domain and body.keywords:
+            try:
+                domain_service.upsert_domain(session, body.domain, body.keywords, source="user")
+            except ValueError as exc:
+                # 长度非法已在 Pydantic 拦截，这里只兜底记录，不挡栏目创建
+                logger.warning("领域登记被拒（domain=%s）：%s", body.domain, exc)
         row = Pillar(**body.model_dump())
         session.add(row)
         session.flush()
         result = _pillar_dict(row)
+        pillar_id = row.id
+    # P-2：自动采样只入队（快照关键词 + pillar 去重键），立即返回 job_id；
+    # 付费网络请求由 worker 进程执行，页面按 /api/sampling/jobs/{id} 轮询真实进度。
+    result["sampling_job_id"] = None
     if config.PILLAR_AUTO_SAMPLE and body.keywords:
-        # 栏目先建好（关键词池登记）再采样：persist 时按 URL 去重与领域过滤，
-        # 排期时才能命中。采样在响应返回后的后台执行，页面轮询素材数。
-        background.add_task(_auto_sample_pillar, row.id)
-        result["auto_sampling"] = True
-    else:
-        result["auto_sampling"] = False
+        try:
+            job, _ = sampling_jobs.enqueue(
+                kind="pillar", keywords=body.keywords,
+                pillar_id=pillar_id, dedupe_key=f"pillar:{pillar_id}",
+            )
+            result["sampling_job_id"] = job.id
+        except ValueError as exc:
+            logger.warning("栏目自动采样入队失败（pillar=%s）：%s", pillar_id, exc)
     return result
 
 
 @router.get("/pillars/{pillar_id}/materials")
 def pillar_materials(pillar_id: int) -> dict:
-    """本周命中该栏目关键词的素材条数（新建栏目自动采样进度轮询用）。"""
+    """本周可排期素材数（P-2 起：只表示素材储备，采样任务进度看 /api/sampling/jobs/{id}）。"""
     with session_scope() as session:
         pillar = session.get(Pillar, pillar_id)
         if pillar is None:

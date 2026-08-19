@@ -10,14 +10,13 @@ import re
 from datetime import datetime, timedelta
 from functools import lru_cache
 
-import yaml
 from sqlalchemy import or_, select, update
 
 from .. import config
 from ..db import session_scope
 from ..models import HotItem, TagLibrary, Topic, ViralSample
 from ..schemas import ViralTeardown
-from . import generator, prompt_engine
+from . import domain_service, generator, prompt_engine
 
 logger = logging.getLogger(__name__)
 
@@ -27,63 +26,32 @@ _LATIN_WORD = re.compile(r"[a-z0-9]+")
 
 
 def load_domains() -> dict[str, list[str]]:
-    """领域关键词表 data/domains.yml（改词表不改代码，每次采集现读）。
-
-    两种写法等价：
-      领域名: {keywords: [..]}   预留每领域附加配置
-      领域名: [..]              纯关键词列表
-    """
-    data = yaml.safe_load(config.DOMAINS_FILE.read_text(encoding="utf-8")) or {}
-    domains = data.get("domains") or {}
-    result: dict[str, list[str]] = {}
-    for domain, spec in domains.items():
-        keywords = (spec or {}).get("keywords", []) if isinstance(spec, dict) else (spec or [])
-        result[str(domain)] = [str(kw) for kw in keywords]
-    return result
+    """领域词表（P-2 起存数据库，domains.yml 只是种子源）。委托 domain_service。"""
+    return domain_service.load_domains()
 
 
 def register_domain(domain: str, keywords: list[str]) -> bool:
-    """注册/合并领域词表（建栏目选官方类目时自动登记，保证采集入库过滤能命中）。
+    """注册/合并领域词表（兼容入口）：已有领域只追加缺失关键词。
 
-    已有领域只追加缺失关键词；返回是否发生写入。写回统一为
-    {domains: {名称: {keywords: [...]}}} 结构（原文件两种写法都兼容读）。
+    返回是否发生写入。建栏目路径请改用 domain_service.upsert_domain
+    （与栏目插入同一事务）；本函数独立开事务提交。
     """
-    text = config.DOMAINS_FILE.read_text(encoding="utf-8") if config.DOMAINS_FILE.is_file() else ""
-    data = yaml.safe_load(text) or {}
-    domains = data.get("domains") or {}
-    spec = domains.get(domain)
-    existing = list((spec or {}).get("keywords", []) if isinstance(spec, dict) else (spec or []))
-    added = [kw for kw in keywords if kw and kw not in existing]
-    if domain in domains and not added:
+    try:
+        with session_scope() as session:
+            result = domain_service.upsert_domain(session, domain, keywords, source="user")
+            return bool(result["created"] or result["added_keywords"])
+    except ValueError as exc:
+        logger.warning("领域登记被拒（%s）：%r", exc, domain)
         return False
-    existing.extend(added)
-    domains[domain] = {"keywords": existing}
-    data["domains"] = domains
-    header = (
-        "# 领域关键词表（改词表不改代码）。采集落库规则：条目标题命中任一关键词才入库\n"
-        "# hot_items 并自动建候选选题；多领域命中取先声明者。\n"
-        "# 官方类目由系统在创建栏目时自动登记/合并关键词（app/services/xhs_discovery）。\n"
-    )
-    config.DOMAINS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    config.DOMAINS_FILE.write_text(
-        header + yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
-    )
-    return True
 
 
 def match_domain(title: str, domains: dict[str, list[str]] | None = None) -> tuple[str, str] | None:
-    """返回 (领域, 命中关键词)；多领域命中取 YAML 中先声明者；未命中返回 None。
+    """返回 (领域, 命中关键词)；多领域命中取先声明者；未命中返回 None。
 
-    domains 传入预载的领域表（批量采集时整轮只读一次 data/domains.yml）；
-    缺省现读（单条入口，如人工喂样本）。
+    domains 传入预载的领域表（批量采集时整轮只查一次库）；
+    缺省现查（单条入口，如人工喂样本）。委托 domain_service。
     """
-    text = title.lower()
-    for domain, keywords in (domains if domains is not None else load_domains()).items():
-        for keyword in keywords:
-            if keyword.lower() in text:
-                return domain, keyword
-    return None
+    return domain_service.match_domain(title, domains)
 
 
 def tokenize(text: str) -> set[str]:

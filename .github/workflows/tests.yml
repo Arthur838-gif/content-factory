@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: content-factory
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: content-factory/requirements-dev.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # 迁移链路用官方 CLI 走一遍空库升级（与部署文档同一入口）
+      - name: Alembic 空库升级
+        run: alembic -x db=${RUNNER_TEMP}/ci_empty.db upgrade head
+
+      - name: pytest 正式用例
+        run: python -m pytest tests -q
+
+      # 全量离线验收（LLM mock / RedFox 桩 / 本地 mock mcp）：
+      # 不调任何付费 API；真实 LLM 与 RedFox 验收保持显式手动（见 README）
+      - name: 离线验收脚本全量回归
+        run: python tests/run_all.py

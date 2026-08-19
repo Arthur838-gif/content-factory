@@ -23,13 +23,8 @@ from app import config  # noqa: E402
 _TMP = Path(tempfile.mkdtemp(prefix="p7_check_"))
 config.DB_PATH = _TMP / "app.db"
 config.BACKUP_DIR = _TMP / "backups"
-# 词表用 fixture 的临时副本：建栏目会往词表登记关键词（P5d2），避免污染共享 fixture
-_DOMAINS_TMP = _TMP / "domains.yml"
-_DOMAINS_TMP.write_text(
-    (PROJECT_ROOT / "tests" / "fixtures" / "domains.test.yml").read_text(encoding="utf-8"),
-    encoding="utf-8",
-)
-config.DOMAINS_FILE = _DOMAINS_TMP
+# 领域词表已入库（P-2）：种子直接读共享 fixture（只读导入；建栏目只写临时库）
+config.DOMAINS_FILE = PROJECT_ROOT / "tests" / "fixtures" / "domains.test.yml"
 config.RUN_SCHEDULER = False
 config.NOTIFY_WEBHOOK = ""
 config.LLM_MOCK = True
@@ -82,6 +77,9 @@ _REPOS = [
 def main() -> int:
     print(f"临时工作目录：{_TMP}")
     init_db()
+    from _support import seed_domains_from  # noqa: E402  词表入库后的种子导入（幂等）
+
+    seed_domains_from(config.DOMAINS_FILE)
     client = TestClient(app)
 
     print("\n[1] to_hot_items 映射")

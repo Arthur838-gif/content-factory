@@ -35,7 +35,11 @@ async function generate(topicId, platform, btn) {
   const banner = document.createElement('div');
   banner.className = 'notice';
   banner.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:99;min-width:300px;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.18)';
-  banner.innerHTML = `<strong>正在生成${_PLATFORM_LABEL[platform] || platform}内容…</strong><br><span id="gen-elapsed">已用时 0 秒</span><br><span class="muted">长文生成可能需要 2–4 分钟，请保持页面打开</span>`;
+  const strong = document.createElement('strong');
+  strong.textContent = `正在生成${_PLATFORM_LABEL[platform] || platform}内容…`;
+  const elapsed = document.createElement('span'); elapsed.id = 'gen-elapsed'; elapsed.textContent = '已用时 0 秒';
+  const hint = document.createElement('span'); hint.className = 'muted'; hint.textContent = '长文生成可能需要 2–4 分钟，请保持页面打开';
+  banner.append(strong, document.createElement('br'), elapsed, document.createElement('br'), hint);
   document.body.appendChild(banner);
   const started = Date.now();
   const timer = setInterval(() => {

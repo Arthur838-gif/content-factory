@@ -32,14 +32,8 @@ from app import config  # noqa: E402
 _TMP = Path(tempfile.mkdtemp(prefix="p5_check_"))
 config.DB_PATH = _TMP / "app.db"
 config.BACKUP_DIR = _TMP / "backups"
-# 词表用 fixture 的临时副本：建栏目会往词表登记领域/关键词（P5d2），
-# 写共享 fixture 会污染精确断言依赖的种子内容
-_DOMAINS_TMP = _TMP / "domains.yml"
-_DOMAINS_TMP.write_text(
-    (PROJECT_ROOT / "tests" / "fixtures" / "domains.test.yml").read_text(encoding="utf-8"),
-    encoding="utf-8",
-)
-config.DOMAINS_FILE = _DOMAINS_TMP
+# 领域词表已入库（P-2）：种子直接读共享 fixture（只读导入；建栏目只写临时库）
+config.DOMAINS_FILE = PROJECT_ROOT / "tests" / "fixtures" / "domains.test.yml"
 config.RUN_SCHEDULER = False
 config.NOTIFY_WEBHOOK = ""
 config.XHS_SAMPLE_KEYWORDS = []  # 走栏目关键词池分支
@@ -92,6 +86,9 @@ def _seed_hot_items() -> None:
 def main() -> int:
     print(f"临时工作目录：{_TMP}")
     init_db()
+    from _support import seed_domains_from  # noqa: E402  词表入库后的种子导入（幂等）
+
+    seed_domains_from(config.DOMAINS_FILE)
     _seed_hot_items()
     client = TestClient(app)  # 不进 lifespan
 
@@ -336,27 +333,25 @@ def main() -> int:
     home14 = client.get("/")
     check("工作台显示新标题", home14.status_code == 200 and "省下百万预算的AI大片工作流" in home14.text)
 
-    print("\n[15] 新建栏目自动采样 + 素材进度端点")
-    from app.api import routes_pillars
-
-    sampled_pillars: list[int] = []
-    original_task = routes_pillars._auto_sample_pillar
-    routes_pillars._auto_sample_pillar = lambda pid: sampled_pillars.append(pid)
+    print("\n[15] 新建栏目自动采样入队 + 素材数端点")
     config.PILLAR_AUTO_SAMPLE = True
     try:
         r15 = client.post("/api/pillars", json={
             "name": "自动采样验证", "domain": "AI与编程", "slots_per_week": 1,
             "keywords": ["AI工具"], "active": True})
         body15 = r15.json()
-        # TestClient 同步执行后台任务：创建返回时应已完成采样调度
-        check("创建 201 且响应带 auto_sampling 标记", r15.status_code == 201
-              and body15.get("auto_sampling") is True and sampled_pillars == [body15["id"]],
-              f"{body15.get('auto_sampling')} {sampled_pillars}")
+        job_id = body15.get("sampling_job_id")
+        check("创建 201 且响应带采样任务 id", r15.status_code == 201
+              and isinstance(job_id, int), str(body15))
+        d15 = client.get(f"/api/sampling/jobs/{job_id}").json()
+        check("任务已入队（kind=pillar、词快照、pillar_id 关联）",
+              d15["status"] == "queued" and d15["kind"] == "pillar"
+              and d15["keywords"] == ["AI工具"] and d15["pillar_id"] == body15["id"]
+              and d15["total_queries"] == 1, str(d15))
         r15b = client.post("/api/pillars", json={"name": "无词栏目", "keywords": []})
-        check("无关键词栏目不触发采样", r15b.json().get("auto_sampling") is False)
+        check("无关键词栏目不入队", r15b.json().get("sampling_job_id") is None)
     finally:
         config.PILLAR_AUTO_SAMPLE = False
-        routes_pillars._auto_sample_pillar = original_task
     m15 = client.get(f"/api/pillars/{pid_c}/materials")
     check("素材进度端点返回本周命中数与门槛",
           m15.status_code == 200 and m15.json()["matched"] >= 3

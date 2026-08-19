@@ -71,8 +71,13 @@ class AlertReceiver(BaseHTTPRequestHandler):
 def main() -> int:
     print(f"临时工作目录：{_TMP}")
 
-    print("\n[1] 建库建表（第 5 章全量 8 张表）")
+    print("\n[1] 建库建表（迁移链全量升级 + 领域种子导入）")
     init_db()
+    from _support import seed_domains_from  # noqa: E402  词表入库后的种子导入（幂等）
+
+    seed_stats = seed_domains_from(config.DOMAINS_FILE)
+    check("领域种子导入（fixture 3 域）", seed_stats["seed_domains"] == 3,
+          f"domains_total={seed_stats['domains_total']}")
     with get_engine().connect() as conn:
         from sqlalchemy import text
 

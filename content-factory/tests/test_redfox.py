@@ -192,7 +192,7 @@ def main() -> int:
         redfox_items = [HotItemSchema(source="xhs", title="redfox条目", fans=100)]
         xhs_sample.redfox_enabled = lambda: True  # 强制视为已启用，验证 try 分支
         xhs_sample.search_hot_items = lambda kw: redfox_items
-        got, src = collector._fetch_keyword("AI工具")
+        got, src = collector.fetch_keyword("AI工具")
         check("RedFox 可用 → 采样走 redfox 源", src == "redfox" and got is redfox_items)
 
         # 5b. RedFox 报错 → 降级 self._search（mcp）
@@ -200,14 +200,14 @@ def main() -> int:
             raise redfox.RedFoxError("余额不足")
         xhs_sample.search_hot_items = boom
         collector._search = lambda kw: list(mock_mcp_notes)
-        got, src = collector._fetch_keyword("AI工具")
+        got, src = collector.fetch_keyword("AI工具")
         check("RedFox 失败 → 降级 mcp 并正常解析",
               src == "mcp" and len(got) == 1 and got[0].title == mock_mcp_notes[0]["title"])
 
         # 5c. enabled() 真实读 config：无 Key 时不碰 RedFox
         xhs_sample.redfox_enabled = saved_enabled  # 恢复真实实现
         xhs_sample.search_hot_items = lambda kw: (_ for _ in ()).throw(AssertionError("不应调用 redfox"))
-        got, src = collector._fetch_keyword("AI工具")
+        got, src = collector.fetch_keyword("AI工具")
         check("无 Key → 不调 RedFox 直走 mcp", src == "mcp" and len(got) == 1)
     finally:
         config.REDFOX_API_KEY = saved_key

@@ -114,6 +114,17 @@ REDFOX_WINDOW_DAYS = int(os.environ.get("CF_REDFOX_WINDOW_DAYS", "7"))
 # ---- 运行开关 ----
 RUN_SCHEDULER = os.environ.get("RUN_SCHEDULER", "1") != "0"
 
+# ---- 采样任务 worker（P-2：任务持久化 + 可恢复执行）----
+# 内嵌 worker：API 进程内起一个轮询线程（单机开发模式默认开）。
+# 长期/多人部署建议 CF_WORKER_EMBEDDED=0 并单独跑
+# `.venv/Scripts/python -m app.services.worker`（一个或多个实例均可，
+# 领取是原子 UPDATE，多 worker 不会重复执行同一任务）。
+WORKER_EMBEDDED = os.environ.get("CF_WORKER_EMBEDDED", "1") not in ("0", "false", "no")
+WORKER_POLL_SECONDS = float(os.environ.get("CF_WORKER_POLL_SECONDS", "2"))
+# 任务租约：running 超过该时长未心跳 → 视为进程崩溃，回队重跑（attempts 上限内）
+WORKER_JOB_LEASE_SECONDS = int(os.environ.get("CF_WORKER_JOB_LEASE_SECONDS", "900"))
+WORKER_JOB_MAX_ATTEMPTS = int(os.environ.get("CF_WORKER_JOB_MAX_ATTEMPTS", "3"))
+
 # ---- LLM（M5 产品内，P0 起；计划书第 13.4 节）----
 # OpenAI 兼容协议，客户端只依赖下面三个环境变量，供应商切换不改代码。
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com").rstrip("/")

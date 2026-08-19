@@ -2,6 +2,8 @@
 
 唯一事实来源：《双端内容工厂 · 开发计划书 v1.3》第 5 章。
 字段名、类型、约束与文档逐一对应；新增字段前先更新文档并提升版本号。
+例外：P-2 基础设施三表（Domain / DomainKeyword / SamplingJob）不在计划书
+第 5 章内，是词表入库 + 任务持久化改造的新增合同，变更同样走 Alembic 迁移。
 
 时间约定：全部使用本地时区 naive datetime，与 APScheduler 本地调度一致。
 """
@@ -17,6 +19,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -228,6 +231,99 @@ class CollectorState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
+class Domain(Base):
+    """domains：领域词表（P-2 起数据库为唯一事实源，domains.yml 只作种子导入源）。
+
+    ordering 编码匹配优先级（多领域命中取先声明者）：YAML 种子按声明顺序
+    分配，官方类目垫后，新建领域追加在尾部。停用（enabled=False）后不参与
+    匹配与采样，但保留历史数据引用（topics.domain 等存字符串快照，无外键）。
+    """
+
+    __tablename__ = "domains"
+    __table_args__ = (Index("ix_domains_ordering", "ordering"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    type: Mapped[str] = mapped_column(String(16), default="custom", comment="custom / official")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    ordering: Mapped[int] = mapped_column(Integer, default=0, comment="匹配优先级，小者先")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class DomainKeyword(Base):
+    """domain_keywords：领域关键词（领域内唯一；来源 seed=种子导入 / user=建栏目等人工 / discovery=推荐词）。"""
+
+    __tablename__ = "domain_keywords"
+    __table_args__ = (
+        Index("uq_domain_keywords_domain_keyword", "domain_id", "keyword", unique=True),
+        Index("ix_domain_keywords_domain_ordering", "domain_id", "ordering"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("domains.id"), nullable=False)
+    keyword: Mapped[str] = mapped_column(String(64))
+    ordering: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str] = mapped_column(String(16), default="seed")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class SamplingJob(Base):
+    """sampling_jobs：采样任务（P-2 持久化队列 + 可恢复 worker）。
+
+    API 只入队（202 + job_id），worker 原子 claim + lease/heartbeat 逐关键词执行。
+    status 终态：succeeded / succeeded_empty / failed / blocked / canceled；
+    succeeded_empty = 全关键词跑完但零抓取（合法结果，不触发熔断）。
+    dedupe_key 常驻保留（历史可审计）；唯一性只约束活跃任务
+    （SQLite 部分唯一索引），同一键的任务跑完即可再次排队。
+    """
+
+    __tablename__ = "sampling_jobs"
+    __table_args__ = (
+        Index("ix_sampling_jobs_status_id", "status", "id"),
+        Index("ix_sampling_jobs_pillar_id", "pillar_id"),
+        Index(
+            "uq_sampling_jobs_dedupe_active",
+            "dedupe_key",
+            unique=True,
+            sqlite_where=text(
+                "dedupe_key IS NOT NULL AND status IN ('queued', 'running')"
+            ),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), default="manual", comment="pillar / manual / scheduled")
+    collector: Mapped[str] = mapped_column(String(32), default="xhs_sample")
+    pillar_id: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="历史日志用途，不设外键（栏目删除不挡）")
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    keywords: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="关键词快照（入队时定死，重试不漂移）")
+    total_queries: Mapped[int] = mapped_column(Integer, default=0)
+    completed_queries: Mapped[int] = mapped_column(Integer, default=0)
+    current_keyword: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    fetched: Mapped[int] = mapped_column(Integer, default=0)
+    inserted: Mapped[int] = mapped_column(Integer, default=0)
+    filtered_out: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates_skipped: Mapped[int] = mapped_column(Integer, default=0)
+    topics_created: Mapped[int] = mapped_column(Integer, default=0)
+    topics_merged: Mapped[int] = mapped_column(Integer, default=0)
+    viral_created: Mapped[int] = mapped_column(Integer, default=0)
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="活跃任务去重键（部分唯一索引约束，终态不挡重跑）"
+    )
+    meta: Mapped[dict | None] = mapped_column(
+        JSON, nullable=True, comment="扩展信息：降级关键词、各关键词数据源等"
+    )
+
+
 ALL_MODELS = (
     Topic,
     Prompt,
@@ -240,4 +336,7 @@ ALL_MODELS = (
     CollectorState,
     Pillar,
     WeekTheme,
+    Domain,
+    DomainKeyword,
+    SamplingJob,
 )

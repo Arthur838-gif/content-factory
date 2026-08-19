@@ -15,15 +15,17 @@ from .api import (
     routes_admin,
     routes_articles,
     routes_discovery,
+    routes_domains,
     routes_pages,
     routes_pillars,
     routes_prompts,
+    routes_sampling,
     routes_stats,
     routes_topics,
     routes_viral_samples,
 )
 from .db import init_db
-from .services import prompt_engine
+from .services import domain_service, prompt_engine
 from .services.scheduler import create_scheduler
 
 logging.basicConfig(
@@ -35,16 +37,30 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # 领域种子幂等导入（P-2）：domains.yml 只作导入源，库内是唯一事实源
+    seeded = domain_service.seed_domains()
+    logging.getLogger(__name__).info("领域词表就绪：%s", seeded)
     # 种子模板幂等入库（M4）：重启绝不覆盖库内已改模板
-    seeded = prompt_engine.seed_prompts()
-    if seeded:
-        logging.getLogger(__name__).info("种子模板入库：%s", seeded)
+    seeded_prompts = prompt_engine.seed_prompts()
+    if seeded_prompts:
+        logging.getLogger(__name__).info("种子模板入库：%s", seeded_prompts)
     scheduler = None
     if config.RUN_SCHEDULER:
         scheduler = create_scheduler()
         scheduler.start()
         logging.getLogger(__name__).info("调度器已启动：%s", [j.id for j in scheduler.get_jobs()])
+    # 内嵌采样 worker（单机开发模式；长期部署改独立进程 + CF_WORKER_EMBEDDED=0）。
+    # 不挂在 RUN_SCHEDULER 分支下：手动模式（关定时省费）仍要有 worker 消费手动任务。
+    if config.WORKER_EMBEDDED:
+        from .services.worker import run_embedded_worker
+
+        run_embedded_worker()
+        logging.getLogger(__name__).info("内嵌 sampling worker 已启动")
     yield
+    # worker 线程是 daemon：随进程退出；显式停一下让测试/优雅停机不摸旧连接
+    from .services.worker import stop_embedded_worker
+
+    stop_embedded_worker()
     if scheduler is not None:
         scheduler.shutdown(wait=False)
 
@@ -86,6 +102,8 @@ def create_app() -> FastAPI:
     app.include_router(routes_viral_samples.router)
     app.include_router(routes_pillars.router)
     app.include_router(routes_discovery.router)
+    app.include_router(routes_domains.router)
+    app.include_router(routes_sampling.router)
     app.include_router(routes_pages.router)
 
     @app.get("/static/assets/{article_id}/{filename:path}", include_in_schema=False)

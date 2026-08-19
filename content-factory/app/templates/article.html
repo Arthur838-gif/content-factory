@@ -23,11 +23,20 @@ async function scoreTitle(btn) {
       body: JSON.stringify({title: document.getElementById('copy-title').innerText.trim(), keyword: ''})});
     const d = await r.json();
     if (!r.ok) { box.textContent = d.detail || '打分失败'; return; }
-    const dims = (d.dimensions || []).map(x => `${x.name}(${x.weight})：${x.score}`).join('　');
-    box.innerHTML = `<strong style="font-size:22px">${d.total}</strong> <span class="badge ${d.grade === 'S' || d.grade === 'A' ? 'ready' : 'failed'}">${d.grade} 级</span><br>${dims}` +
-      (d.problems && d.problems.length ? `<br>问题：${d.problems.join('；')}` : '') +
-      (d.suggestions && d.suggestions.length ? `<br>建议：${d.suggestions.join('；')}` : '') +
-      (d.revised_titles && d.revised_titles.length ? `<br>改写版：${d.revised_titles.map(t => `「${t}」`).join(' ')}` : '');
+    // 打分结果含 LLM 生成的改写标题/建议（外部文本）：DOM 节点 + textContent 渲染
+    box.replaceChildren();
+    const total = document.createElement('strong');
+    total.style.fontSize = '22px';
+    total.textContent = d.total;
+    box.append(total, ' ');
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + (d.grade === 'S' || d.grade === 'A' ? 'ready' : 'failed');
+    badge.textContent = d.grade + ' 级';
+    box.append(badge, document.createElement('br'));
+    box.append((d.dimensions || []).map(x => `${x.name}(${x.weight})：${x.score}`).join('　'));
+    if (d.problems && d.problems.length) box.append(document.createElement('br'), '问题：' + d.problems.join('；'));
+    if (d.suggestions && d.suggestions.length) box.append(document.createElement('br'), '建议：' + d.suggestions.join('；'));
+    if (d.revised_titles && d.revised_titles.length) box.append(document.createElement('br'), '改写版：' + d.revised_titles.map(t => `「${t}」`).join(' '));
   } finally { btn.disabled = false; btn.textContent = '六维打分'; }
 }
 async function rewriteArticle(platform, btn) {

@@ -4,7 +4,8 @@
   hotboard   每小时采集一次热榜（M1）
   expire     每小时把到期且仍为 new 的选题置为 archived（第 5 章）
   xhs_sample 默认不排程（RedFox 按调用计费，采样在 /viral 页手动触发；
-             CF_XHS_SAMPLE_SCHEDULED=true 恢复每 6 小时采样；熔断后自动跳过）
+             CF_XHS_SAMPLE_SCHEDULED=true 恢复每 6 小时定时）。P-2 起定时
+             任务只入队 sampling_jobs，由 worker 执行；熔断后跳过入队
   teardown   每周一 06:00 低粉爆款周度 LLM 拆解（A3，P-1b）
   backup     每日 03:00 备份 SQLite → data/backups/app_YYYYMMDD.db，保留 7 份
   cleanup    每周日 05:00 物理删除 90 天前的 hot_items（与备份错开 ≥ 1 小时）
@@ -23,7 +24,7 @@ from ..collectors import hotboard  # noqa: F401  注册 hotboard 采集器
 from ..collectors import xhs_sample  # noqa: F401  注册 xhs_sample 采样器（P-1b）
 from ..collectors import github_tools  # noqa: F401  注册 github_tools 采集器（P7）
 from ..db import session_scope
-from . import notify, radar
+from . import notify, radar, sampling_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +81,23 @@ def job_hotboard() -> None:
         logger.warning("热榜采集已熔断，跳过本轮：%s", exc)
 
 
-@_scheduled_job("xhs_sample", "定时采样失败")
+@_scheduled_job("xhs_sample", "定时采样入队失败")
 def job_xhs_sample() -> None:
+    """定时采样只入队（P-2）：调度线程不做付费网络请求。
+
+    执行由 worker 领取；熔断时跳过入队（避免每轮堆积 blocked 任务），
+    同键活跃任务存在时 enqueue 去重复用。
+    """
+    if collectors_base.circuit_open("xhs_sample"):
+        logger.warning("小红书采样已熔断，跳过本轮定时入队（等待人工恢复）")
+        return
     try:
-        collectors_base.run_collector("xhs_sample")
-    except collectors_base.CircuitOpenError as exc:
-        logger.warning("小红书采样已熔断，跳过本轮（等待人工恢复）：%s", exc)
+        job, created = sampling_jobs.enqueue(kind="scheduled", collector="xhs_sample")
+    except ValueError:
+        logger.info("定时采样跳过：无可采样关键词（栏目词池与领域词表均为空）")
+        return
+    logger.info("定时采样已入队：job=%s（新建=%s，关键词 %s 个）",
+                job.id, created, job.total_queries)
 
 
 @_scheduled_job("xhs_teardown", "周度拆解任务异常")

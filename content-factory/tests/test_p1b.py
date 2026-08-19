@@ -118,6 +118,9 @@ def main() -> int:
 
     print("\n[2] 建库与 A3 种子模板幂等入库")
     init_db()
+    from _support import seed_domains_from  # noqa: E402  词表入库后的种子导入（幂等）
+
+    seed_domains_from(config.DOMAINS_FILE)
     seeded = prompt_engine.seed_prompts()
     check("A3 模板入库 xhs+teardown+v1", "xhs+teardown+v1" in seeded, "、".join(seeded))
     again = prompt_engine.seed_prompts()

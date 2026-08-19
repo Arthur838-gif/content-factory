@@ -9,10 +9,13 @@
 <div class="big">{{ p.planned }}/{{ p.slots }}</div><span class="muted">已排期</span>
 <div class="muted">已生成 {{ p.generated }} · 已发布 {{ p.published }}</div></div>
 {% else %}{% endfor %}
-{% if collectors %}
+{% if collectors or latest_jobs %}
 <div class="card stat"><strong>采样引擎</strong>
 {% for c in collectors %}
 <div>{% if c.status == 'open' %}<span class="badge failed">熔断</span>{% else %}<span class="badge ready">正常</span>{% endif %} <span class="muted">{{ c.short }}{% if c.status == 'open' %} · 需到 <a href="/viral">素材采样</a> 解除{% endif %}</span></div>
+{% endfor %}
+{% for j in latest_jobs %}
+<div class="muted">最近任务 #{{ j.id }} {{ {'queued': '排队中', 'running': '运行中', 'succeeded': '成功', 'succeeded_empty': '成功（空）', 'failed': '失败', 'blocked': '熔断拦截', 'canceled': '已取消'}.get(j.status, j.status) }} {{ j.completed_queries }}/{{ j.total_queries }}{% if j.status == 'running' and j.current_keyword %}（{{ j.current_keyword }}）{% endif %}{% if j.status == 'failed' %}（{{ j.error_type }}）{% endif %}</div>
 {% endfor %}
 <span class="muted">{% if xhs_scheduled %}定时采样运行中，也可手动补采（<a href="/viral">素材采样</a>）{% else %}手动触发（<a href="/viral">素材采样</a>）{% endif %}</span></div>
 {% endif %}

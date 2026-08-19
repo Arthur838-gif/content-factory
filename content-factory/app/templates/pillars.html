@@ -65,7 +65,7 @@ function renderKwArea() {
   const domain = document.getElementById('domain-input').value.trim();
   const box = document.getElementById('kw-chips');
   const notes = document.getElementById('idea-notes');
-  box.innerHTML = ''; notes.innerHTML = '';
+  box.replaceChildren(); notes.replaceChildren();
   if (OFFICIAL.has(domain)) {
     const ideas = IDEAS[domain];
     if (!ideas) {
@@ -77,17 +77,18 @@ function renderKwArea() {
     } else {
       ideas.keywords.forEach(kw => box.appendChild(_chip(kw)));
       if (ideas.notes.length) {
-        notes.innerHTML = '该类目近 7 天爆款示例：' + ideas.notes
+        // 外部数据（RedFox 笔记标题）一律 textContent，不拼 HTML
+        notes.textContent = '该类目近 7 天爆款示例：' + ideas.notes
           .map(n => `「${n.title}」（赞 ${n.likes}）`).join('　');
       }
-      if (!ideas.keywords.length) {
-        notes.innerHTML = '该类目近 7 天暂无爆款数据（榜单每天 19:00 更新），请手动填关键词或换类目。';
+      if (!ideas.notes.length && !ideas.keywords.length) {
+        notes.textContent = '该类目近 7 天暂无爆款数据（榜单每天 19:00 更新），请手动填关键词或换类目。';
       }
     }
   } else if (DOMAINS[domain]) {
     (DOMAINS[domain] || []).forEach(kw => box.appendChild(_chip(kw)));
   } else if (domain) {
-    notes.innerHTML = '新领域：创建时会连同关键词自动登记进词表（采集入库过滤按关键词命中）。';
+    notes.textContent = '新领域：创建时会连同关键词自动登记进词表（采集入库过滤按关键词命中）。';
   }
 }
 async function fetchIdeas(btn) {
@@ -110,7 +111,8 @@ async function fetchAccounts(btn) {
     const r = await fetch('/api/discovery/benchmark-accounts?keyword=' + encodeURIComponent(kw));
     const d = await r.json();
     if (!r.ok) { alert(d.detail || '搜索对标账号失败'); return; }
-    box.innerHTML = d.accounts.length
+    // 账号名/简介是 RedFox 外部数据：textContent 拼纯文本渲染，不走 HTML 拼接
+    box.textContent = d.accounts.length
       ? '对标账号（关键词「' + kw + '」最热）：' + d.accounts
           .map(a => `${a.name}（粉 ${a.fans}，作品 ${a.works}）${a.desc ? ' — ' + a.desc : ''}`).join('；')
       : '未搜到相关账号，换个关键词试试。';
@@ -136,31 +138,42 @@ document.getElementById('pillar-form').addEventListener('submit', async e => {
     const r = await fetch('/api/pillars', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(_payload())});
     if (!r.ok) { alert((await r.json()).detail || '创建失败'); return; }
     const d = await r.json();
-    if (!d.auto_sampling) { location.reload(); return; }
-    await _waitSampling(d.id, status, d.keywords.length);
+    if (!d.sampling_job_id) { location.reload(); return; }
+    await _waitSampling(d.sampling_job_id, status);
     location.reload();
   } finally { btn.disabled = false; }
 });
-async function _waitSampling(id, status, keywordCount) {
-  // 采完一轮统一落库，素材数会从 0 直接跳到最终值；3 秒一轮，90 秒兜底
-  for (let i = 0; i < 30; i++) {
-    await new Promise(res => setTimeout(res, 3000));
+async function _waitSampling(jobId, status) {
+  // 任务已持久化：按 job_id 轮询真实状态（排队/当前词/抓取入库数），终态即停
+  const STATUS = {queued: '排队中', running: '采样中', succeeded: '成功', succeeded_empty: '成功（空结果）',
+                  failed: '失败', blocked: '被熔断拦截', canceled: '已取消'};
+  for (let i = 0; i < 120; i++) {
+    let j = null;
     try {
-      const m = await (await fetch(`/api/pillars/${id}/materials`)).json();
-      if (m.matched >= m.min_required) {
-        status.textContent = `采样完成：本周已命中 ${m.matched} 条素材，可以生成本周计划了。`;
-        await new Promise(res => setTimeout(res, 800));
-        return;
-      }
-      if (m.matched > 0) {
-        status.textContent = `采样完成：本周命中 ${m.matched} 条（建议 ≥${m.min_required}），可到「素材采样」补采后再排期。`;
-        await new Promise(res => setTimeout(res, 1200));
-        return;
-      }
-      status.textContent = `栏目已创建，正在自动采样 ${keywordCount} 个关键词（RedFox 按调用计费）…`;
+      const r = await fetch('/api/sampling/jobs/' + jobId);
+      if (r.ok) j = await r.json();
     } catch (_) { /* 轮询失败重试 */ }
+    if (!j) { status.textContent = '采样任务查询失败：任务已在后台排队，可到「素材采样」页查看。'; return; }
+    if (j.status === 'queued') {
+      status.textContent = `采样任务 #${jobId} 排队中（共 ${j.total_queries} 个关键词，RedFox 按调用计费）…`;
+    } else if (j.status === 'running') {
+      status.textContent = `采样任务 #${jobId} 进行中：${j.completed_queries}/${j.total_queries}`
+        + (j.current_keyword ? `（当前：${j.current_keyword}）` : '')
+        + `，已抓取 ${j.fetched} 条 / 入库 ${j.inserted} 条…`;
+    } else {
+      let summary;
+      if (j.status === 'succeeded') summary = `采样完成：抓取 ${j.fetched} 条，入库 ${j.inserted} 条${j.viral_created ? `，新增爆款 ${j.viral_created} 条` : ''}。`;
+      else if (j.status === 'succeeded_empty') summary = '采样完成：全部关键词暂无新结果（可能都已入库或该词无数据）。';
+      else if (j.status === 'blocked') summary = '采样被熔断拦截：到「素材采样」页解除熔断后，在采样任务列表点「重试」。';
+      else if (j.status === 'failed') summary = `采样失败（${j.error_type || '异常'}）：${(j.error || '').slice(0, 120)}；可到「素材采样」页重试。`;
+      else summary = '采样已取消。';
+      status.textContent = summary;
+      await new Promise(res => setTimeout(res, 1500));
+      return;
+    }
+    await new Promise(res => setTimeout(res, 2000));
   }
-  status.textContent = '采样仍在后台进行或未命中素材：稍后刷新查看，也可到「素材采样」手动补采。';
+  status.textContent = '采样仍在后台执行（长任务）：稍后刷新查看，素材入库后即可排期。';
   await new Promise(res => setTimeout(res, 2000));
 }
 async function renamePillar(id, btn) {

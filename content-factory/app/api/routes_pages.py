@@ -9,7 +9,7 @@ from .. import config
 from ..collectors import base as collectors_base
 from ..db import session_scope
 from ..models import Article, Asset, CollectorState, Pillar, Prompt, Topic
-from ..services import radar, scoring
+from ..services import domain_service, radar, sampling_jobs, scoring
 from .routes_prompts import _prompt_dict
 
 router = APIRouter(tags=["pages"])
@@ -90,6 +90,10 @@ def topics_page(request: Request):
             ).all()
             for label in [_WORKBENCH_LABELS.get(row.name, row.name)]
         ]
+        # P-2：采样任务落库后，工作台补最近任务结果（进度详情去 /viral）
+        latest_jobs = [
+            sampling_jobs.job_dict(j) for j in sampling_jobs.list_jobs(limit=3)
+        ]
         # P5b 周主题：分组头展示（深挖联动的主线）
         from ..models import WeekTheme
 
@@ -109,6 +113,7 @@ def topics_page(request: Request):
             "idea_topics": idea_topics,
             "progress": progress,
             "collectors": collectors,
+            "latest_jobs": latest_jobs,
             "xhs_scheduled": config.XHS_SAMPLE_SCHEDULED,
             "themes": themes,
             "now": datetime.now(),
@@ -135,6 +140,8 @@ def pillars_page(request: Request):
             pid = (topic.evidence or {}).get("pillar_id")
             if pid is not None:
                 planned[pid] = planned.get(pid, 0) + 1
+        # 领域词表已入库（P-2）：同事务读一次，custom 划分沿用"名称不在官方类目"口径
+        domains = domain_service.load_domains(session)
         # P5b 周主题卡片：建议（proposed）待确认，确认（confirmed）后按主题分期
         from ..models import WeekTheme
 
@@ -153,10 +160,10 @@ def pillars_page(request: Request):
             "themes": themes,
             "week_range": f"{week_start.strftime('%m.%d')}–{week_end.strftime('%m.%d')}",
             # 领域词表：表单领域下拉 + 关键词推荐标签（新手不用猜填什么）
-            "domains": radar.load_domains(),
+            "domains": domains,
             # 官方 24 类目（七日爆款）分组展示；词表里其余算自定义领域
             "official_categories": list(XHS_CATEGORIES),
-            "custom_domains": [d for d in radar.load_domains() if d not in XHS_CATEGORIES],
+            "custom_domains": [d for d in domains if d not in XHS_CATEGORIES],
         },
     )
 
@@ -220,7 +227,7 @@ def _viral_labels() -> dict:
 
 @router.get("/viral")
 def viral_page(request: Request):
-    """低粉爆款管理页：采集器状态、人工喂样本表单与样本列表（P-1b）。"""
+    """低粉爆款管理页：采集器状态、采样任务、人工喂样本表单与样本列表（P-1b / P-2）。"""
     with session_scope() as session:
         rows = session.execute(radar.query_viral_samples(session).limit(100)).all()
         samples = [
@@ -230,9 +237,12 @@ def viral_page(request: Request):
             for s, i in rows
         ]
     states = collectors_base.collector_status()
+    recent_jobs = [
+        sampling_jobs.job_dict(j) for j in sampling_jobs.list_jobs(limit=10)
+    ]
     from ..collectors.redfox import XHS_CATEGORIES
 
-    domains = radar.load_domains()
+    domains = domain_service.load_domains()
     # 领域候选 = 词表自定义领域 + 官方 24 类目（datalist 可下拉选也可手填）
     domain_options = list(domains) + [c for c in XHS_CATEGORIES if c not in domains]
     return templates.TemplateResponse(
@@ -241,7 +251,7 @@ def viral_page(request: Request):
         context={"samples": samples, "states": states, "labels": _viral_labels(),
                  "scheduled": config.XHS_SAMPLE_SCHEDULED,
                  "interval_hours": config.XHS_SAMPLE_INTERVAL_HOURS,
-                 "domain_options": domain_options},
+                 "domain_options": domain_options, "recent_jobs": recent_jobs},
     )
 
 

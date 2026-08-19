@@ -20,7 +20,7 @@ from sqlalchemy import desc, select
 from ..db import session_scope
 from ..models import HotItem, Pillar, Topic, WeekTheme
 from ..schemas import WeekThemePlan
-from . import generator, radar
+from . import domain_service, generator, radar
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,9 @@ def _week_pillar_topics(session, week_start: datetime) -> list[Topic]:
     return [t for t in rows if t.status != "archived"]
 
 
-def _snapshot(item: HotItem, keyword: str) -> dict:
-    # 领域取 radar 词表口径（标签候选/领域列展示一致）；未命中给空串
-    matched = radar.match_domain(item.title)
+def _snapshot(item: HotItem, keyword: str, domains: dict[str, list[str]]) -> dict:
+    # 领域取词表口径（标签候选/领域列展示一致）；未命中给空串
+    matched = domain_service.match_domain(item.title, domains)
     domain = matched[0] if matched else ""
     return radar._evidence_snapshot(item, domain, keyword)
 
@@ -240,6 +240,7 @@ def plan_pillar_week(
     matched = _matched_pool(session, pillar, week_start)
     by_id = {item.id: (item, kw) for item, kw in matched}
     week_theme = theme_row.theme if theme_row else ""
+    domains = domain_service.load_domains(session)  # 快照领域匹配一次预载，不逐条查库
 
     created: list[Topic] = []
     slots = max(int(pillar.slots_per_week or 1), 1)
@@ -265,7 +266,7 @@ def plan_pillar_week(
             "pillar_name": pillar.name,
             "week_start": week_start.isoformat(timespec="seconds"),
             "week_theme": week_theme,
-            "items": [_snapshot(item, kw) for item, kw in matched[:COLLECTION_EVIDENCE_SIZE]],
+            "items": [_snapshot(item, kw, domains) for item, kw in matched[:COLLECTION_EVIDENCE_SIZE]],
         }
         topic = Topic(
             title=title[:512],
@@ -296,12 +297,12 @@ def plan_pillar_week(
             for hid in sub.get("hot_item_ids") or []:
                 pair = by_id.get(int(hid)) if str(hid).isdigit() else None
                 if pair:
-                    items.append(_snapshot(pair[0], pair[1]))
+                    items.append(_snapshot(pair[0], pair[1], domains))
                     first_pair = first_pair or pair
             if not items and matched:
                 # 子话题没绑到有效素材：退回该子话题序号对应的最高赞素材
                 first_pair = matched[min(episode - 1, len(matched) - 1)]
-                items = [_snapshot(first_pair[0], first_pair[1])]
+                items = [_snapshot(first_pair[0], first_pair[1], domains)]
             topic = Topic(
                 title=f"{pillar.name}第{episode}期｜{sub_title}"[:512],
                 angle=pillar.angle or "",
@@ -347,7 +348,7 @@ def plan_pillar_week(
                     "week_theme": week_theme,
                     "episode": episode,
                     "episodes_total": slots,
-                    "items": [_snapshot(item, kw)],
+                    "items": [_snapshot(item, kw, domains)],
                 },
                 expires_at=week_end,
             )
