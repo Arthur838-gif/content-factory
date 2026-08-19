@@ -15,6 +15,7 @@
  10. P5b 合集素材不足拦截（防模型虚构内容）
  11. P5b 按主题重排：归档未按主题的旧选题并按主题重新分期
  12. P5b 归档选题不占档位：全部归档后排期重新建满
+ 16. 单栏目定向采样（POST /api/pillars/{id}/sample：词池快照 / 去重 / 空词池 422）
 
 运行：.venv/Scripts/python tests/test_pillar.py
 """
@@ -195,6 +196,9 @@ def main() -> int:
     check("新建表单领域为可选可填（input+datalist）、带关键词推荐容器",
           'id="domain-input"' in page.text and 'id="domain-options"' in page.text
           and 'id="kw-chips"' in page.text)
+    check("启用栏目行带定向采样入口（采样一轮 + 进度状态区）",
+          "采样一轮" in page.text and 'id="sample-status"' in page.text
+          and "samplePillar(" in page.text)
 
     print("\n[8] P5b 周主题：生成（mock）/ 素材不足拦截 / 确认")
     r8 = client.post("/api/pillars", json={
@@ -358,6 +362,24 @@ def main() -> int:
           and m15.json()["min_required"] == pillar_service.COLLECTION_MIN_MATERIALS, str(m15.json()))
     m404 = client.get("/api/pillars/99999/materials")
     check("不存在栏目 404", m404.status_code == 404, str(m404.status_code))
+
+    print("\n[16] 单栏目定向采样（补采入口）")
+    s404 = client.post("/api/pillars/99999/sample")
+    check("不存在栏目 404", s404.status_code == 404, str(s404.status_code))
+    s16 = client.post(f"/api/pillars/{pid_c}/sample")
+    b16 = s16.json()
+    check("定向采样 202（kind=pillar、当前词池快照、pillar_id 关联）",
+          s16.status_code == 202 and b16["created"] is True
+          and b16["job"]["kind"] == "pillar" and b16["job"]["pillar_id"] == pid_c
+          and b16["job"]["keywords"] == ["AI工具", "AIGC"]
+          and b16["job"]["status"] == "queued", str(b16)[:160])
+    s16b = client.post(f"/api/pillars/{pid_c}/sample")
+    check("连点去重（created=False，返回同一任务不重复计费）",
+          s16b.status_code == 202 and s16b.json()["created"] is False
+          and s16b.json()["job"]["id"] == b16["job"]["id"], str(s16b.json())[:120])
+    s16c = client.post(f"/api/pillars/{pid_m}/sample")
+    check("词池为空 422（[6] 已清空该栏目关键词）",
+          s16c.status_code == 422, f"{s16c.status_code} {str(s16c.json())[:80]}")
 
     print()
     if FAILURES:

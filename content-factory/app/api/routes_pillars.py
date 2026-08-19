@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
 
 from .. import config
+from ..collectors.base import circuit_open
 from ..db import session_scope
 from ..models import Article, Asset, Pillar, Topic, WeekTheme
 from ..services import domain_service, pillar as pillar_service, sampling_jobs
@@ -94,6 +95,36 @@ def pillar_materials(pillar_id: int) -> dict:
             "matched": pillar_service.matched_pool_size(session, pillar),
             "min_required": pillar_service.COLLECTION_MIN_MATERIALS,
         }
+
+
+@router.post("/pillars/{pillar_id}/sample", status_code=202)
+def sample_pillar(pillar_id: int) -> dict:
+    """对单个栏目当前关键词池入队一轮定向采样（只花这个栏目的钱，按词计费）。
+
+    建栏目自动采样之外的单栏目补采入口（素材不足 / 想刷新素材时用）。
+    与建栏目共用 pillar:{id} 去重键：该栏目已有排队/运行任务时返回在跑
+    任务（created=False）不重复计费；熔断 409 与手动采样口径一致。
+    """
+    with session_scope() as session:
+        pillar = session.get(Pillar, pillar_id)
+        if pillar is None:
+            raise HTTPException(404, f"栏目 {pillar_id} 不存在")
+        keywords = list(pillar.keywords or [])
+    if not keywords:
+        raise HTTPException(422, "该栏目关键词池为空，无法定向采样")
+    if circuit_open("xhs_sample"):
+        raise HTTPException(
+            409,
+            "采集器 xhs_sample 已熔断；到「素材采样」页解除熔断后再触发",
+        )
+    try:
+        job, created = sampling_jobs.enqueue(
+            kind="pillar", collector="xhs_sample", keywords=keywords,
+            pillar_id=pillar_id, dedupe_key=f"pillar:{pillar_id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return {"job": sampling_jobs.job_dict(job), "created": created}
 
 
 @router.put("/pillars/{pillar_id}")
