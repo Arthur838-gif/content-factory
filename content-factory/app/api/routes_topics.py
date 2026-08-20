@@ -86,7 +86,16 @@ def _build_variables(session, topic: Topic) -> dict:
         lines = []
         for it in items:
             if isinstance(it, dict):
-                lines.append(f"- {it.get('title', '')}（{it.get('url', '')}）".rstrip("（）"))
+                # 原写法 rstrip("（）") 会把非空 URL 的右括号也剥掉（desc 接上去后显形）
+                url = str(it.get("url") or "")
+                head = f"- {it.get('title', '')}" + (f"（{url}）" if url else "")
+                # 素材正文摘录（radar._evidence_snapshot）：给模型真实内容依据；
+                # 已含在标题里的（GitHub 仓库行）不重复带，控制提示词长度。
+                # 注意不能叫 desc——会遮蔽本函数后面用到的 sqlalchemy.desc
+                item_desc = str(it.get("desc") or "").strip()
+                if item_desc and item_desc not in (it.get("title") or ""):
+                    head += f"：{item_desc[:120]}"
+                lines.append(head)
         reference_points = "\n".join(lines)
     tag_rows = session.scalars(
         select(TagLibrary.tag)

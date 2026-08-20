@@ -198,6 +198,13 @@ worker 领取是条件 UPDATE，多 worker 进程不会重复执行同一任务�
 - api_key 安全：明文只存本地 `data/app.db`（`data/` 已 gitignore）；API/页面/日志一律掩码（`sk_ab****1234`），编辑表单不回填明文，留空即保持原 key。「测试」按钮对文案模型发 `max_tokens=8` 的极小请求，对图片模型发最小出图请求（**会真实计费 1 张**，页面上有确认提示）。
 - 接口：`GET/POST /api/models`、`PUT/DELETE /api/models/{id}`、`POST /api/models/{id}/activate`、`POST /api/models/{id}/test`；迁移 `0003_model_configs` 启动自动执行。
 
+## 小红书链路增强（素材摘录 + 平台上限校验 + 违禁词体检）
+
+- **素材正文进提示词**：evidence 快照带素材摘录（RedFox 的 `raw.article.desc`，截 200 字），生成时 `reference_points` 从「标题（链接）」升级为「标题（链接）：正文摘录」——模型仿写/深挖有真实内容可依，落实 v4 模板「素材里没有的不编造」的铁律；GitHub 仓库行的 desc 已含在标题里，不重复带。旧选题 evidence 无 desc 字段也兼容（缺省不带）。
+- **平台硬上限校验**：`XhsNote` 标题 ≤ 20 字（小红书发布上限）、正文 ≤ 950 字（给末尾标签行留余量，合计不超 1000 字上限）。超限直接生成失败进重试，报错文案拼进下一轮提示让模型自纠，免得发布前手动剪文案。封面/金句超长仍走 imaging 自动缩字号的软约束。
+- **违禁词体检（发布前质检）**：xhs ready 文章页「违禁词体检」按钮 → RedFox 小红书违禁词库检测标题+正文（**按调用计费，页面 confirm 后才发请求**，不进自动链路）→ 命中词逐个可点「＋词」回填本地 `sensitive_xhs.txt`（文件追加、去重、即时生效），下次生成直接在本地方向拦截——词表滚动扩充的既定路径。英文子串误报按 skill 同款规则剔除（如 "av" ⊂ "Gravitas" 不算命中，避免回填词表后误杀含英文的文章）。接口：`POST /api/articles/{id}/sensitive-check`（wechat 行 409，RedFox 错误 502）、`POST /api/sensitive/{platform}/words`（单批 ≤50 词、单词 ≤50 字，防误杀整站的超短词在服务层拦截）。
+- 敏感词表本体仍是文件即数据（`data/sensitive_xhs.txt`，每行一词），冷启动占位词待人工按「所涉领域监管词 + 平台违禁词」滚动扩充，体检回填是加速器不是替代。
+
 ## Non-goals（明确不做，计划书第 2 章）
 | --- | --- |
 | 小红书自动化发布（Playwright、Cookie 注入、MCP 发布等一切形态） | 平台无官方发布 API，脚本发布触发风控，矩阵号限流封号风险不可接受 |

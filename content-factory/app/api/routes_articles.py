@@ -1,4 +1,8 @@
-"""文章读取、素材包下载与发布回填接口（P3 / M8；P4 回填后触发评分重算）。"""
+"""文章读取、素材包下载与发布回填接口（P3 / M8；P4 回填后触发评分重算）。
+
+P8a 增量：小红书文章发布前的 RedFox 违禁词体检（手动、按调用计费），
+命中词可一键回填本地词表（下次生成直接拦截，滚动扩充）。
+"""
 import logging
 from datetime import datetime
 from io import BytesIO
@@ -10,9 +14,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .. import config
+from ..collectors.redfox import RedFoxError
 from ..db import session_scope
 from ..models import Article, Asset, PublishRecord, Topic
-from ..services import scoring
+from ..services import scoring, sensitive
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +124,58 @@ def download_package(article_id: int) -> StreamingResponse:
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="article-{article_id}-package.zip"'},
     )
+
+
+@router.post("/articles/{article_id}/sensitive-check")
+def sensitive_check(article_id: int) -> dict:
+    """发布前违禁词体检：标题 + 正文全文交 RedFox 小红书违禁词库检测。
+
+    按调用计费——只由文章页手动触发（页面 confirm 后才发请求），不进任何
+    自动链路。结果不落库：体检是发布前的人工质检动作，词表回填才是持久化。
+    """
+    # 延迟导入：collectors.redfox 依赖 httpx，P3 离线验收不触发本接口
+    from ..collectors import redfox
+
+    with session_scope() as session:
+        article = session.get(Article, article_id)
+        if article is None:
+            raise HTTPException(status_code=404, detail=f"article {article_id} 不存在")
+        if article.platform != "xhs":
+            raise HTTPException(
+                status_code=409, detail="违禁词体检目前仅支持小红书文章（RedFox 小红书词库）"
+            )
+        text = f"{article.title}\n\n{article.content}"
+    try:
+        result = redfox.sensitive_word_search(text)
+    except RedFoxError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    return {
+        "article_id": article_id,
+        "checked_chars": len(text),
+        "word_count": len(result["words"]),
+        "words": result["words"],
+        "categories": result["categories"],
+        "billed": True,
+    }
+
+
+class SensitiveWordsIn(BaseModel):
+    """命中词回填本地词表：单批 ≤ 50 词，单词 ≤ 50 字（防误杀整站的超短词在服务层拦）。"""
+
+    words: list[str] = Field(..., min_length=1, max_length=50)
+
+
+@router.post("/sensitive/{platform}/words", status_code=201)
+def add_sensitive_words(platform: str, payload: SensitiveWordsIn) -> dict:
+    """把体检命中的词追加进平台敏感词表（文件追加、即时生效、去重）。
+
+    滚动扩充词表的既定路径（sensitive_xhs.txt 头注释）：命中词经人工确认后
+    入表，下次生成直接在本地方向拦截，不再依赖每次付费体检。
+    """
+    if platform not in ("xhs", "wechat"):
+        raise HTTPException(status_code=422, detail=f"未知平台 {platform}（支持 xhs / wechat）")
+    added, skipped = sensitive.add_words(platform, payload.words)
+    return {"platform": platform, "added": added, "skipped": skipped}
 
 
 class PublishMetrics(BaseModel):

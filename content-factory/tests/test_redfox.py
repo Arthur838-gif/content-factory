@@ -10,6 +10,8 @@
   5. 单源调度：配 Key 走 RedFox；RedFox 失败直接抛错（无降级源）；
      无 Key 立即报错（不联网）
   6. probe_fans：RedFox 失败时返回带 error 的结构（不抛异常、不误报结论）
+  7. 违禁词检测：HTML 标注提取命中词（保序去重）/ 分类过滤空项 / 业务码
+     报错 / 无 Key 不联网 / 超 3000 字拒绝
 
 运行：.venv/Scripts/python tests/test_redfox.py
 """
@@ -243,6 +245,59 @@ def main() -> int:
         config.REDFOX_API_KEY = saved_key
         xhs_sample.redfox_enabled = saved_enabled
         xhs_sample.redfox_probe = saved_probe
+
+    print("\n[7] 违禁词检测（发布前体检，X-API-KEY 头 + HTML 标注解析）")
+    saved_key = config.REDFOX_API_KEY
+    real_post = redfox._post
+    try:
+        config.REDFOX_API_KEY = "ak_test"
+
+        def fake_sensitive_post(path, payload, extra_headers=None):
+            assert path == redfox.SENSITIVE_PATH, path
+            assert payload["platform"] == "小红书" and payload["content"], payload
+            assert extra_headers and extra_headers.get("X-API-KEY") == "ak_test", extra_headers
+            return {
+                "code": 2000, "msg": "成功",
+                "data": {
+                    "content": "加微信<span class=\"banned-word\">免费领</span>课程，"
+                               "<span class=\"sensitive-word\">限时</span>优惠，"
+                               "<span class=\"banned-word\">免费领</span>私信，"
+                               "用 <span class=\"banned-word\">av</span> 与 <span class=\"banned-word\">free</span>",
+                    "originalContent": "加微信免费领课程，限时优惠，免费领私信，用 Gravitas 与 free",
+                    "prohibitedWordsType": ["诱导行为", "  ", ""],
+                },
+            }
+
+        redfox._post = fake_sensitive_post
+        result = redfox.sensitive_word_search("加微信免费领课程，限时优惠，免费领私信，用 Gravitas 与 free")
+        check("命中词提取（保序去重）", result["words"] == ["免费领", "限时", "free"], str(result["words"]))
+        check("英文子串误报剔除（av ⊂ Gravitas，standalone free 保留）",
+              "av" not in result["words"] and "free" in result["words"], str(result["words"]))
+        check("风险分类过滤空项", result["categories"] == ["诱导行为"], str(result["categories"]))
+
+        redfox._post = lambda path, payload, extra_headers=None: {"code": 4001, "msg": "余额不足"}
+        try:
+            redfox.sensitive_word_search("内容")
+            check("业务码非 2000 抛 RedFoxError", False)
+        except redfox.RedFoxError as exc:
+            check("业务码非 2000 抛 RedFoxError", "4001" in str(exc), str(exc))
+
+        config.REDFOX_API_KEY = ""
+        try:
+            redfox.sensitive_word_search("内容")
+            check("无 Key 抛 RedFoxError（不联网）", False)
+        except redfox.RedFoxError as exc:
+            check("无 Key 抛 RedFoxError（不联网）", "未配置" in str(exc), str(exc))
+
+        config.REDFOX_API_KEY = "ak_test"
+        try:
+            redfox.sensitive_word_search("字" * 3001)
+            check("超 3000 字拒绝（不调接口）", False)
+        except redfox.RedFoxError as exc:
+            check("超 3000 字拒绝（不调接口）", "3001" in str(exc), str(exc))
+    finally:
+        config.REDFOX_API_KEY = saved_key
+        redfox._post = real_post
 
     print()
     if FAILURES:

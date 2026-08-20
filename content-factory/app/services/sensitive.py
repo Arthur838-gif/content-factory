@@ -56,3 +56,40 @@ def find_hits(text: str, platform: str) -> list[str]:
             hits.append(word)
             seen.add(word)
     return hits
+
+
+# 单次追加的词数与单词长度上限：词表是子串匹配，超短词（如单字母）会
+# 误杀整站文章，超长串没有匹配意义——都从入口拦掉
+_MAX_BATCH_WORDS = 50
+_MAX_WORD_CHARS = 50
+
+
+def add_words(platform: str, words: list[str]) -> tuple[list[str], list[str]]:
+    """把命中词追加进平台词表文件（滚动扩充，文件头注释承诺的回填路径）。
+
+    去重（对现有词表 + 本批次内部）、去空白、跳过 # 开头与超限词；
+    load_words 每次现读，写入即生效（无需重启）。返回 (added, skipped)。
+    """
+    path = _wordlist_path(platform)
+    existing = set(load_words(platform))
+    added: list[str] = []
+    skipped: list[str] = []
+    for raw in words:
+        word = (raw or "").strip()
+        if not word or word.startswith("#") or len(word) > _MAX_WORD_CHARS:
+            skipped.append(word)
+            continue
+        if word in existing:
+            skipped.append(word)
+            continue
+        existing.add(word)
+        added.append(word)
+    if added:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        with path.open("a", encoding="utf-8") as fh:
+            if text and not text.endswith("\n"):
+                fh.write("\n")
+            fh.write("\n".join(added) + "\n")
+        logger.info("敏感词表[%s] 追加 %d 词：%s", platform, len(added), "、".join(added))
+    return added, skipped

@@ -13,6 +13,7 @@
 
 运行：.venv/Scripts/python tests/test_p1.py
 """
+import json
 import sys
 import tempfile
 import traceback
@@ -223,6 +224,27 @@ def main() -> int:
         check("空串报错并带原文开头", False)
     except ValueError as exc:
         check("空串报错并带原文开头", "不是合法 JSON" in str(exc) and "原文开头" in str(exc), str(exc)[:80])
+
+    print("\n[9b] 小红书平台硬上限（超限在生成侧拦下，免得发布前手动剪）")
+    base = {"title": "正常标题", "content": "正文", "tags": [], "cover_text": "", "image_quotes": []}
+    check("20 字标题恰好通过", len(XhsNote.model_validate(
+        {**base, "title": "一二三四五六七八九十一二三四五六七八九十"}).title) == 20)
+    try:
+        XhsNote.model_validate({**base, "title": "一二三四五六七八九十一二三四五六七八九十1"})
+        check("21 字标题拒绝", False)
+    except ValueError as exc:
+        check("21 字标题拒绝", "20 字上限" in str(exc), str(exc)[:60])
+    try:
+        XhsNote.model_validate({**base, "content": "字" * 951})
+        check("951 字正文拒绝（标签行余量）", False)
+    except ValueError as exc:
+        check("951 字正文拒绝（标签行余量）", "1000 字上限" in str(exc), str(exc)[:60])
+    # 校验错误进 generator 重试链：错误文案会拼进下一轮提示让模型自纠
+    try:
+        generator._parse_and_validate(json.dumps({**base, "title": "超" * 21}, ensure_ascii=False), XhsNote)
+        check("校验失败包装为 ValueError（可重试）", False)
+    except ValueError as exc:
+        check("校验失败包装为 ValueError（可重试）", "校验失败" in str(exc), str(exc)[:60])
 
     print("\n[10] 页面不缓存（生成后返回工作台信息实时）")
     home10 = client.get("/")

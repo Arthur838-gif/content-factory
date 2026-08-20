@@ -60,13 +60,33 @@ class XhsNote(BaseModel):
     """小红书输出 Schema（计划书 6.1 / SDD 5.6，M5 与适配层之间的契约）。
 
     LLM 只产出这五个字段的结构化 JSON；#标签拼接与图文合成（P2）属 M7 适配层。
+    title/content 带平台硬上限校验（超限直接生成失败进重试，模型按报错自纠），
+    免得用户发布前手动剪文案；cover_text/金句超长由 imaging 自动缩字号兜底，保持软约束。
     """
 
-    title: str = Field(..., description="标题，≤ 20 字，含 1-2 个 emoji 与情绪词或数字")
-    content: str = Field(..., description="口语化正文，每段 ≤ 3 行，段间空一行，总字数 300-800")
+    title: str = Field(..., min_length=1, description="标题，≤ 20 字，含 1-2 个 emoji 与情绪词或数字")
+    content: str = Field(..., min_length=1, description="口语化正文，每段 ≤ 3 行，段间空一行，总字数 300-800")
     tags: list[str] = Field(..., description="3-5 个相关标签，不带 # 号")
     cover_text: str = Field(..., description="封面主标题文案，≤ 12 字，有冲击力")
     image_quotes: list[str] = Field(..., description="2-4 句金句，每句 ≤ 20 字，可直接印在图上")
+
+    @field_validator("title")
+    @classmethod
+    def _title_platform_limit(cls, value: str) -> str:
+        # 小红书发布标题上限 20 字，超了用户得手动剪——在生成侧拦下让模型重出
+        if len(value) > 20:
+            raise ValueError(f"标题 {len(value)} 字超过小红书 20 字上限，请压缩：「{value}」")
+        return value
+
+    @field_validator("content")
+    @classmethod
+    def _content_platform_limit(cls, value: str) -> str:
+        # 正文 + 末尾标签行合计 ≤ 1000（小红书正文上限）；给标签行留 50 字余量
+        if len(value) > 950:
+            raise ValueError(
+                f"正文 {len(value)} 字过长：加上标签行将超小红书 1000 字上限，请压缩到 950 字内"
+            )
+        return value
 
 
 class ManualSampleInput(BaseModel):

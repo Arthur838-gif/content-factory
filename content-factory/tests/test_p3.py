@@ -122,6 +122,55 @@ def main() -> int:
           resp_f.status_code == 200 and "敏感词命中：测试词" in resp_f.text
           and "重新生成" in resp_f.text)
     check("预览不存在 id → 404", client.get("/articles/9999").status_code == 404)
+    check("xhs ready 页带违禁词体检入口（手动、计费提示）",
+          "checkSensitive" in html and "sensitive-check" in html and "RedFox 计费" in html)
+    resp_w = client.get(f"/articles/{wid}")
+    check("wechat 页无体检入口", "checkSensitive" not in resp_w.text)
+
+    print("\n[2b] 违禁词体检 API（RedFox 打桩，不产生真实计费调用）")
+    from app.collectors import redfox as redfox_mod
+    from app.collectors.redfox import RedFoxError
+
+    real_check = redfox_mod.sensitive_word_search
+    try:
+        redfox_mod.sensitive_word_search = lambda text: {
+            "words": ["免费领", "限时"], "categories": ["诱导行为"]}
+        resp = client.post(f"/api/articles/{aid1}/sensitive-check")
+        body = resp.json()
+        check("xhs → 200 + 命中词/分类/计费标记",
+              resp.status_code == 200 and body["words"] == ["免费领", "限时"]
+              and body["categories"] == ["诱导行为"] and body["billed"] is True
+              and body["checked_chars"] > 0, str(body))
+        check("wechat → 409（仅小红书词库）",
+              client.post(f"/api/articles/{wid}/sensitive-check").status_code == 409)
+        check("不存在 id → 404",
+              client.post("/api/articles/9999/sensitive-check").status_code == 404)
+
+        def _boom(text):
+            raise RedFoxError("HTTP 401：鉴权失败")
+        redfox_mod.sensitive_word_search = _boom
+        resp = client.post(f"/api/articles/{aid1}/sensitive-check")
+        check("RedFox 失败 → 502 + 摘要透传",
+              resp.status_code == 502 and "401" in resp.json()["detail"], str(resp.json()))
+    finally:
+        redfox_mod.sensitive_word_search = real_check
+
+    print("\n[2c] 命中词回填本地词表（文件追加、去重、即时生效）")
+    resp = client.post("/api/sensitive/xhs/words", json={"words": ["测试违禁词", " ", "测试违禁词"]})
+    body = resp.json()
+    check("追加成功且去重去空白", resp.status_code == 201 and body["added"] == ["测试违禁词"]
+          and len(body["skipped"]) == 2, str(body))
+    word_file = config.SENSITIVE_FILE_XHS.read_text(encoding="utf-8")
+    check("词表文件含新词", "测试违禁词" in word_file)
+    from app.services import sensitive as sensitive_mod
+    check("load_words 即时可见（无需重启）",
+          "测试违禁词" in sensitive_mod.load_words("xhs"))
+    resp = client.post("/api/sensitive/xhs/words", json={"words": ["测试违禁词"]})
+    check("重复追加 → skipped", resp.json()["added"] == [] and resp.json()["skipped"] == ["测试违禁词"])
+    check("未知平台 → 422",
+          client.post("/api/sensitive/bilibili/words", json={"words": ["x"]}).status_code == 422)
+    check("空词表 → 422",
+          client.post("/api/sensitive/xhs/words", json={"words": []}).status_code == 422)
 
     print("\n[3] 素材包 GET /api/articles/{id}/package")
     resp = client.get(f"/api/articles/{aid1}/package")

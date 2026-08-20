@@ -8,6 +8,7 @@
 {% if article.platform == 'wechat' and (article.meta or {}).get('digest') %}<div class="card"><strong>摘要</strong><pre>{{ article.meta.digest }}</pre></div>{% endif %}
 </section><aside>
 {% if article.status == 'ready' %}<div class="card"><div class="field-title"><strong>标题打分</strong><button class="secondary" onclick="scoreTitle(this)">六维打分</button></div><div id="title-score" class="muted">小红书爆款规律六维加权：主题匹配 / 结构 / 利益 / 情绪 / 稀缺性 / 合规，S/A/B/C 分级。</div></div>{% endif %}
+{% if article.status == 'ready' and article.platform == 'xhs' %}<div class="card"><div class="field-title"><strong>违禁词体检</strong><button class="secondary" onclick="checkSensitive(this)">体检（RedFox 计费）</button></div><div id="sensitive-check" class="muted">调 RedFox 小红书违禁词库检测标题 + 正文；命中的词点一下即加入本地词表，下次生成直接拦截。</div></div>{% endif %}
 {% if article.status == 'ready' %}<div class="card"><strong>多平台改写</strong><p class="muted">以本文为源转换平台风格，保留事实与案例。</p>{% if article.platform == 'xhs' %}<button onclick="rewriteArticle('wechat', this)">改写为公众号长文</button>{% else %}<button onclick="rewriteArticle('xhs', this)">改写为小红书笔记</button>{% endif %}</div>{% endif %}
 <div class="card"><div class="field-title"><strong>图片素材（{{ assets|length }}）</strong>{% if article.platform == 'xhs' and article.status == 'ready' and assets %}<a class="button" href="/api/articles/{{ article.id }}/package">下载素材包</a>{% else %}<button disabled>下载素材包</button>{% endif %}</div>
 {% if assets %}<div class="images">{% for asset in assets %}<a href="/static/assets/{{ article.id }}/{{ asset.filename }}"><img src="/static/assets/{{ article.id }}/{{ asset.filename }}" alt="{{ asset.kind }}"></a>{% endfor %}</div>{% else %}<p class="muted">暂无图片素材。</p>{% endif %}</div>
@@ -39,7 +40,38 @@ async function scoreTitle(btn) {
     if (d.revised_titles && d.revised_titles.length) box.append(document.createElement('br'), '改写版：' + d.revised_titles.map(t => `「${t}」`).join(' '));
   } finally { btn.disabled = false; btn.textContent = '六维打分'; }
 }
-async function rewriteArticle(platform, btn) {
+{% if article.platform == 'xhs' %}async function checkSensitive(btn) {
+  if (!confirm('调用 RedFox 违禁词检测（按调用计费）？')) return;
+  const box = document.getElementById('sensitive-check');
+  btn.disabled = true; btn.textContent = '检测中…';
+  try {
+    const r = await fetch('/api/articles/{{ article.id }}/sensitive-check', {method: 'POST'});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { box.textContent = d.detail || '检测失败'; return; }
+    box.replaceChildren();
+    if (!d.word_count) { box.textContent = `未检出违禁词（检测 ${d.checked_chars} 字）✓`; return; }
+    box.append(`检出 ${d.word_count} 个风险词，点词加入本地词表：`);
+    // 命中词是外部文本：一律 DOM 节点 + textContent（模板安全不变量）
+    for (const w of d.words || []) {
+      const chip = document.createElement('button');
+      chip.className = 'secondary';
+      chip.textContent = `＋${w}`;
+      chip.title = '加入本地敏感词表，下次生成直接拦截';
+      chip.onclick = async () => {
+        chip.disabled = true;
+        try {
+          const rr = await fetch('/api/sensitive/xhs/words', {method: 'POST',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify({words: [w]})});
+          const dd = await rr.json().catch(() => ({}));
+          chip.textContent = rr.ok ? (dd.added && dd.added.length ? `已入表：${w}` : `已在表：${w}`) : (dd.detail || '加词失败');
+        } catch (err) { chip.textContent = '加词失败：' + err; }
+      };
+      box.append(chip, ' ');
+    }
+    if ((d.categories || []).length) box.append(document.createElement('br'), '风险分类：' + d.categories.join('、'));
+  } finally { btn.disabled = false; btn.textContent = '体检（RedFox 计费）'; }
+}
+{% endif %}async function rewriteArticle(platform, btn) {
   if (!confirm('以本文为源改写为' + (platform === 'xhs' ? '小红书笔记' : '公众号长文') + '？保留事实与案例，只换平台风格。')) return;
   btn.disabled = true; btn.textContent = '改写中…（可能需要 2–4 分钟）';
   try {

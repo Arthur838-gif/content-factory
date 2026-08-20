@@ -88,6 +88,8 @@ _MOCK_ITEMS = [
         source="xhs", title="程序员用AI提效的实战心得",
         url="https://www.xiaohongshu.com/explore/viral1", author="小A",
         fans=1200, likes=1200, collects=450, comments=300,
+        # RedFox 洞察结果带 desc（raw.article.desc）——evidence 快照要把它带给生成提示词
+        raw={"article": {"desc": "三年沉淀的AI提效工作流，覆盖写作、复盘与周报。"}},
     ),
     HotItemSchema(  # 与上一条同 URL → 去重
         source="xhs", title="程序员用AI提效的实战心得（重复）",
@@ -184,6 +186,14 @@ def main() -> int:
               and ev["metrics"] == {"fans": 1200, "likes": 1200, "collects": 450, "comments": 300}
               and ev["viral_score"] == 2.5 and ev["matched_keyword"], str(ev))
         check("topics.score 取 viral_score", xhs_topics[0].score == 2.5)
+        check("evidence 含素材正文摘录 desc", ev["desc"] == "三年沉淀的AI提效工作流，覆盖写作、复盘与周报。",
+              str(ev.get("desc")))
+        from app.api import routes_topics
+        variables = routes_topics._build_variables(session, xhs_topics[0])
+        check("reference_points 带标题 + 正文摘录（给模型真实内容依据）",
+              "程序员用AI提效的实战心得" in variables["reference_points"]
+              and "三年沉淀的AI提效工作流" in variables["reference_points"],
+              variables["reference_points"][:90])
 
     client = TestClient(app)  # 不进 lifespan（不起调度器）；init_db 与种子已手动完成
 

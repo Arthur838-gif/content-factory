@@ -7,9 +7,13 @@
 接口（见仓库外 redfox-api文档/，2026-08-18 拉取）：
 - 爆款笔记洞察 POST /story/api/xhs/search/search —— 主采样；
 - 作品内容详情 POST /story/api/xhsUser/queryWorkDetail —— 候选深挖
-  （全文 workDesc + 阅读量 workReadedCount），暂供 CLI 手动使用。
+  （全文 workDesc + 阅读量 workReadedCount），暂供 CLI 手动使用；
+- 违禁词检测 POST /story/api/cozeSkill/sensitiveWordSearch —— 文章发布前
+  手动体检（按调用计费），契约取自 redfox-skills/xiaohongshu-prohibited-word
+  的实测脚本（X-API-KEY 头 + content/platform/source 载荷）。
 
-鉴权：请求头 REDFOX_API_KEY（redfox.hk 密钥管理页创建），按调用计费。
+鉴权：请求头 REDFOX_API_KEY（redfox.hk 密钥管理页创建），按调用计费；
+违禁词接口按 skill 实测另带 X-API-KEY 头（cozeSkill 系与洞察系鉴权头并存）。
 响应包装不统一：详情接口带 {code:2000,msg,data}，洞察接口示例顶层裸给
 （articles 直接在顶层），_unwrap 两种都兼容，首次联调需实测确认。
 """
@@ -29,6 +33,7 @@ INSIGHT_PATH = "/story/api/xhs/search/search"
 WORK_DETAIL_PATH = "/story/api/xhsUser/queryWorkDetail"
 SEVEN_PATH = "/story/api/cozeSkill/getXhsCozeSkillDataSeven"
 SEARCH_USER_PATH = "/story/api/xhsUser/searchUser"
+SENSITIVE_PATH = "/story/api/cozeSkill/sensitiveWordSearch"
 
 # 七日爆款接口的官方类目枚举（文档 2026-08-19 拉取；建栏目的领域下拉与
 # 关键词推荐来源）。「综合全部」是查询用通配值，不作为内容领域，排除。
@@ -80,11 +85,13 @@ def _unwrap(resp, what: str):
     return resp
 
 
-def _post(path: str, payload: dict):
+def _post(path: str, payload: dict, extra_headers: dict | None = None):
     headers = {
         "REDFOX_API_KEY": config.REDFOX_API_KEY,
         "Content-Type": "application/json",
     }
+    if extra_headers:
+        headers.update(extra_headers)
     # 连接建立快败（网络不通没必要等满超时），慢响应等满 REDFOX_TIMEOUT_SECONDS
     timeout = httpx.Timeout(config.REDFOX_TIMEOUT_SECONDS, connect=10.0)
     try:
@@ -222,6 +229,61 @@ def work_detail(work_id: str = "", work_link: str = "") -> dict:
     if not isinstance(data, dict):
         raise RedFoxError("作品详情响应缺少 data 对象")
     return data
+
+
+# 违禁词在标注 HTML 里的三种风险级 span 类名（skill 实测脚本同款正则）
+_SENSITIVE_SPAN = re.compile(
+    r'<span class="(?:banned-word|sensitive-word|industry-banned-word)">(.*?)</span>'
+)
+SENSITIVE_MAX_CHARS = 3000
+
+
+def sensitive_word_search(content: str) -> dict:
+    """小红书违禁词检测（按调用计费，只读；发布前手动体检用）。
+
+    载荷/解析契约取自 redfox-skills/xiaohongshu-prohibited-word 的实测脚本：
+    返回 data.content 为 HTML 标注原文（命中词包在风险级 span 里），
+    prohibitedWordsType 为风险分类列表。返回 {words, categories}；
+    words 保序去重。调用方负责确认计费（页面 confirm 后才触发）。
+    """
+    if not enabled():
+        raise RedFoxError("未配置 REDFOX_API_KEY（.env 的 CF_REDFOX_API_KEY），无法体检")
+    content = (content or "").strip()
+    if not content:
+        raise RedFoxError("待检测内容为空")
+    if len(content) > SENSITIVE_MAX_CHARS:
+        raise RedFoxError(
+            f"内容 {len(content)} 字超检测上限 {SENSITIVE_MAX_CHARS} 字，请缩减后重试"
+        )
+    resp = _unwrap(
+        _post(
+            SENSITIVE_PATH,
+            # source 沿用 skill 实测原值，不改未知契约
+            {"content": content, "platform": "小红书", "source": "小红书违禁词查询-GitHub"},
+            extra_headers={"X-API-KEY": config.REDFOX_API_KEY},
+        ),
+        "违禁词检测",
+    )
+    data = resp if isinstance(resp, dict) else {}
+    words = list(dict.fromkeys(_SENSITIVE_SPAN.findall(str(data.get("content") or ""))))
+    # 英文误匹配过滤（skill 实测脚本同款）：纯英文命中词若是内容里某英文单词
+    # 的子串（如 "av" ⊂ "Gravitas"）即为误报，剔除——否则用户把它回填进本地
+    # 词表后，所有含该子串的文章都会被本地方向误杀
+    original = str(data.get("originalContent") or content)
+    english_words = [w.lower() for w in re.findall(r"[A-Za-z]+", original)]
+    false_positives = {
+        w for w in words
+        if w.isascii() and w.isalpha()
+        and any(w.lower() in ew and w.lower() != ew for ew in english_words)
+    }
+    if false_positives:
+        words = [w for w in words if w not in false_positives]
+        logger.info("违禁词检测剔除英文子串误报：%s", "、".join(sorted(false_positives)))
+    categories = [
+        str(c) for c in (data.get("prohibitedWordsType") or []) if str(c).strip()
+    ]
+    logger.info("违禁词检测完成：%d 个命中词 / %d 个风险分类", len(words), len(categories))
+    return {"words": words, "categories": categories}
 
 
 def probe(keyword: str = "AI工具") -> dict:

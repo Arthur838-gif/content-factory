@@ -170,11 +170,24 @@ def process_xhs_item(
     return result
 
 
+def _item_desc(item: HotItem) -> str:
+    """素材正文摘录：RedFox 洞察的 raw.article.desc / GitHub 的 raw.description。
+
+    截 200 字进 evidence——reference_points 用它给生成提供真实内容依据，
+    而不只是标题（模型只看标题只能自由发挥）。
+    """
+    raw = item.raw or {}
+    article = raw.get("article") if isinstance(raw.get("article"), dict) else {}
+    desc = str(article.get("desc") or raw.get("description") or "").strip()
+    return desc[:200]
+
+
 def _evidence_snapshot(item: HotItem, domain: str, keyword: str, viral: float | None = None) -> dict:
     snapshot = {
         "hot_item_id": item.id,
         "source": item.source,
         "title": item.title,
+        "desc": _item_desc(item),
         "url": item.url,
         "author": item.author,
         "captured_at": (item.captured_at or datetime.now()).isoformat(timespec="seconds"),
