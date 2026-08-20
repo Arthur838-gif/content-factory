@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""RedFox 数据源验收脚本（可重复运行，不依赖外网、Key 与 mcp 服务）。
+"""RedFox 数据源验收脚本（可重复运行，不依赖外网与 Key）。
 
 覆盖：
   1. _to_int 容错（int / "1,200" / "1.2万" / "5w+" / None）
@@ -7,8 +7,8 @@
   3. 洞察解析：articles → HotItem 字段映射；latestHotArticles 兜底不采；
      无标题跳过；URL 缺省按笔记 ID 构造
   4. work_detail：包装解包；空参报错
-  5. 双源调度：配 Key 走 RedFox；RedFox 失败降级 mcp（self._search）；
-     无 Key 直走 mcp
+  5. 单源调度：配 Key 走 RedFox；RedFox 失败直接抛错（无降级源）；
+     无 Key 立即报错（不联网）
   6. probe_fans：RedFox 失败时返回带 error 的结构（不抛异常、不误报结论）
 
 运行：.venv/Scripts/python tests/test_redfox.py
@@ -177,38 +177,38 @@ def main() -> int:
     finally:
         redfox._post = real_post
 
-    print("\n[5] 双源调度（fetch 优先 RedFox，失败降级 mcp）")
+    print("\n[5] 单源调度（fetch 走 RedFox；失败/无 Key 直接抛错，无降级源）")
     saved_key = config.REDFOX_API_KEY
     saved_enabled = xhs_sample.redfox_enabled
     saved_search_hot = xhs_sample.search_hot_items
     collector = xhs_sample.XhsSampleCollector()
-    mock_mcp_notes = [{
-        "note_id": "mcp1", "title": "程序员用AI提效的实战心得",
-        "user": {"nickname": "小A"}, "liked_count": "800",
-    }]
     try:
-        # 5a. 无 Key → 直走 mcp
-        config.REDFOX_API_KEY = ""
+        # 5a. 配 Key → 走 RedFox
         redfox_items = [HotItemSchema(source="xhs", title="redfox条目", fans=100)]
-        xhs_sample.redfox_enabled = lambda: True  # 强制视为已启用，验证 try 分支
+        xhs_sample.redfox_enabled = lambda: True  # 强制视为已启用，验证采样分支
         xhs_sample.search_hot_items = lambda kw: redfox_items
         got, src = collector.fetch_keyword("AI工具")
         check("RedFox 可用 → 采样走 redfox 源", src == "redfox" and got is redfox_items)
 
-        # 5b. RedFox 报错 → 降级 self._search（mcp）
+        # 5b. RedFox 报错 → 异常直接冒泡（mcp 降级源已废弃，由调用方计熔断）
         def boom(kw):
             raise redfox.RedFoxError("余额不足")
         xhs_sample.search_hot_items = boom
-        collector._search = lambda kw: list(mock_mcp_notes)
-        got, src = collector.fetch_keyword("AI工具")
-        check("RedFox 失败 → 降级 mcp 并正常解析",
-              src == "mcp" and len(got) == 1 and got[0].title == mock_mcp_notes[0]["title"])
+        try:
+            collector.fetch_keyword("AI工具")
+            check("RedFox 失败 → 直接抛 RedFoxError（无降级）", False)
+        except redfox.RedFoxError as exc:
+            check("RedFox 失败 → 直接抛 RedFoxError（无降级）", "余额不足" in str(exc), str(exc))
 
-        # 5c. enabled() 真实读 config：无 Key 时不碰 RedFox
+        # 5c. enabled() 真实读 config：无 Key 时立即报错且不联网
+        config.REDFOX_API_KEY = ""
         xhs_sample.redfox_enabled = saved_enabled  # 恢复真实实现
         xhs_sample.search_hot_items = lambda kw: (_ for _ in ()).throw(AssertionError("不应调用 redfox"))
-        got, src = collector.fetch_keyword("AI工具")
-        check("无 Key → 不调 RedFox 直走 mcp", src == "mcp" and len(got) == 1)
+        try:
+            collector.fetch_keyword("AI工具")
+            check("无 Key → 立即抛 RedFoxError 且不联网", False)
+        except redfox.RedFoxError as exc:
+            check("无 Key → 立即抛 RedFoxError 且不联网", "未配置" in str(exc), str(exc))
     finally:
         config.REDFOX_API_KEY = saved_key
         xhs_sample.redfox_enabled = saved_enabled
@@ -232,17 +232,13 @@ def main() -> int:
         result = xhs_sample.probe_fans("AI工具")
         check("成功透传 redfox 探针结果", result["fans_available"] is True and result["source"] == "redfox")
 
+        # 无 Key → 返回配 Key 提示，不调 RedFox（探针也单源化）
         config.REDFOX_API_KEY = ""
         xhs_sample.redfox_enabled = saved_enabled
         xhs_sample.redfox_probe = lambda kw: (_ for _ in ()).throw(AssertionError("不应调用 redfox"))
-        real_call_mcp = xhs_sample.call_mcp_tool
-        xhs_sample.call_mcp_tool = lambda tool, args: list(mock_mcp_notes)
-        try:
-            result = xhs_sample._probe_mcp("AI工具")
-        finally:
-            xhs_sample.call_mcp_tool = real_call_mcp
-        check("probe-mcp 独立可用（不依赖 RedFox）",
-              result["source"] == "mcp" and result["note_count"] == 1)
+        result = xhs_sample.probe_fans("AI工具")
+        check("无 Key → 返回配 Key 提示（不调 RedFox）",
+              "REDFOX_API_KEY" in result.get("conclusion", ""), str(result.get("conclusion")))
     finally:
         config.REDFOX_API_KEY = saved_key
         xhs_sample.redfox_enabled = saved_enabled

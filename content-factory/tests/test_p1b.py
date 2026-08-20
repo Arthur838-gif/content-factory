@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""P-1b 验收脚本（可重复运行，不依赖外网、mcp 服务与真实小红书账号）。
+"""P-1b 验收脚本（可重复运行，不依赖外网与真实小红书账号；fetch_keyword 全程打桩）。
 
 覆盖任务四件套 P-1b 结构验收点：
   1. fans 探针记录存在且结论显式（docs/p-1b-fans-probe.md）
-  2. M2 协议：mock/录制响应下 fetch → HotItem 列表、URL 去重、领域过滤、
-     解析容错（"1.2万"/"1,200"）、fans 缺失降级（只落笔记级数据）
+  2. M2 协议：mock 条目下 fetch → HotItem 列表、URL 去重、领域过滤（含采样词
+     兜底放行）、fans 缺失降级（只落笔记级数据）
   3. M3 打分：viral_score 公式三组样本 + fans=0 不除零；阈值判定边界
   4. 落库与建题：入选样本写 viral_samples 并自动生成 topics(source=radar,
      status=new)，evidence 含 URL/作者/互动数/viral_score/命中关键词
@@ -32,7 +32,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from app import config  # noqa: E402
 
-# 临时库 + fixture 领域词表 + mock LLM + 不起调度器；mcp 指向本机回环（探针不可用）
+# 临时库 + fixture 领域词表 + mock LLM + 不起调度器（采样打桩，不经 RedFox）
 _TMP = Path(tempfile.mkdtemp(prefix="p1b_check_"))
 config.DB_PATH = _TMP / "app.db"
 config.BACKUP_DIR = _TMP / "backups"
@@ -40,14 +40,15 @@ config.DOMAINS_FILE = PROJECT_ROOT / "tests" / "fixtures" / "domains.test.yml"
 config.LLM_MOCK = True
 config.RUN_SCHEDULER = False
 config.NOTIFY_WEBHOOK = ""
-config.XHS_SAMPLE_KEYWORDS = ["AI"]  # 单一检索词，mock 响应一轮返回全部笔记
-config.REDFOX_API_KEY = ""  # 隔离真实付费数据源：强制走 mcp 分支（测试桩在 _search）
+config.XHS_SAMPLE_KEYWORDS = ["AI"]  # 单一检索词，桩响应一轮返回全部笔记
+config.REDFOX_API_KEY = ""  # 隔离真实付费数据源：采样走 fetch_keyword 测试桩
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from app.collectors import base as collectors_base  # noqa: E402
 from app.collectors import xhs_sample  # noqa: E402
+from app.collectors.redfox import RedFoxError  # noqa: E402
 from app.db import init_db, session_scope  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import CollectorState, HotItem, TagLibrary, Topic, ViralSample  # noqa: E402
@@ -80,31 +81,33 @@ class AlertReceiver(BaseHTTPRequestHandler):
         pass
 
 
-# mock/录制响应：一次 search_notes 返回 5 条笔记（含重复 URL / 标题不沾词表 / 无 fans / 低赞）
-_MOCK_NOTES = [
-    {  # 入选低粉爆款：fans=1200, likes=1200, collects=450, comments=300 → 2.5
-        "note_id": "viral1", "title": "程序员用AI提效的实战心得",
-        "user": {"nickname": "小A", "fans": "1,200"},
-        "liked_count": "1200", "collected_count": 450, "comment_count": 300,
-    },
-    {  # 与上一条同 URL（note_id 相同）→ 去重
-        "note_id": "viral1", "title": "程序员用AI提效的实战心得（重复）",
-        "user": {"nickname": "小A"}, "liked_count": "10",
-    },
-    {  # 标题不命中任何领域关键词 → 旧口径被过滤；新口径按采样词兜底放行
+# mock 采样结果（fetch_keyword 桩）：一轮返回 5 条笔记（含重复 URL / 标题不沾
+# 词表 / 无 fans / 低赞）；URL 形状对齐 RedFox 解析结果的 explore 链接
+_MOCK_ITEMS = [
+    HotItemSchema(  # 入选低粉爆款：fans=1200, likes=1200, collects=450, comments=300 → 2.5
+        source="xhs", title="程序员用AI提效的实战心得",
+        url="https://www.xiaohongshu.com/explore/viral1", author="小A",
+        fans=1200, likes=1200, collects=450, comments=300,
+    ),
+    HotItemSchema(  # 与上一条同 URL → 去重
+        source="xhs", title="程序员用AI提效的实战心得（重复）",
+        url="https://www.xiaohongshu.com/explore/viral1", author="小A", likes=10,
+    ),
+    HotItemSchema(  # 标题不命中任何领域关键词 → 旧口径被过滤；新口径按采样词兜底放行
       # （关键词搜回的结果不该再被标题字面匹配扔掉；无 fans 只落 hot_items 不判定爆款）
-        "note_id": "offdomain", "title": "周末露营装备清单与路线",
-        "user": {"nickname": "小C"}, "liked_count": "5000",
-    },
-    {  # 无 fans 字段 → 降级：只落 hot_items，不参与低粉爆款判定
-        "note_id": "nofans", "title": "自媒体博主复盘爆款文案方法论",
-        "user": {"nickname": "小D"}, "liked_count": "800", "collected_count": 90, "comment_count": 40,
-    },
-    {  # fans 可用但点赞未过 VIRAL_LIKES_MIN 预筛 → 落库不判定
-        "note_id": "lowlikes", "title": "AI编程工具横向测评",
-        "user": {"nickname": "小E", "fans": "1000"},
-        "liked_count": "100", "collected_count": 20, "comment_count": 10,
-    },
+        source="xhs", title="周末露营装备清单与路线",
+        url="https://www.xiaohongshu.com/explore/offdomain", author="小C", likes=5000,
+    ),
+    HotItemSchema(  # 无 fans → 降级：只落 hot_items，不参与低粉爆款判定
+        source="xhs", title="自媒体博主复盘爆款文案方法论",
+        url="https://www.xiaohongshu.com/explore/nofans", author="小D",
+        likes=800, collects=90, comments=40,
+    ),
+    HotItemSchema(  # fans 可用但点赞未过 VIRAL_LIKES_MIN 预筛 → 落库不判定
+        source="xhs", title="AI编程工具横向测评",
+        url="https://www.xiaohongshu.com/explore/lowlikes", author="小E",
+        fans=1000, likes=100, collects=20, comments=10,
+    ),
 ]
 
 
@@ -140,19 +143,15 @@ def main() -> int:
     check("fans=0 按 max(fans,1) 计算不除零", zero_fans == 50.0, f"{zero_fans}")
     big_fans = HotItemSchema(source="xhs", title="t", fans=20000, likes=99999)
     check("fans 超上限直接否决", not radar.is_low_fans_viral(big_fans))
-    check("互动数容错：'1.2万'→12000", xhs_sample._to_int("1.2万") == 12000)
-    check("互动数容错：'1,200'→1200", xhs_sample._to_int("1,200") == 1200)
-    check("互动数容错：None→0", xhs_sample._to_int(None) == 0)
-    parsed = xhs_sample.parse_search_notes(_MOCK_NOTES)
-    check("M2 协议：解析结果为 HotItem 列表",
-          len(parsed) == 5 and all(isinstance(p, HotItemSchema) for p in parsed))
-    check("M2 协议：fans 抽取（user.fans='1,200'→1200）", parsed[0].fans == 1200, f"{parsed[0].fans}")
-    check("M2 协议：无 fans 字段 → 0（不伪造）", parsed[3].fans == 0)
+    # 互动数容错（"1.2万"/"1,200"/None）在 tests/test_redfox.py 的 _to_int 用例覆盖
+    check("mock 条目齐备（爆款/重复/不沾词表/无 fans/低赞 各 1）",
+          len(_MOCK_ITEMS) == 5 and _MOCK_ITEMS[0].fans == 1200 and _MOCK_ITEMS[3].fans == 0
+          and _MOCK_ITEMS[1].url == _MOCK_ITEMS[0].url)
 
     print("\n[4] M2 采样落库（mock 响应，第 1 次）")
     collector_cls = xhs_sample.XhsSampleCollector
-    original_search = collector_cls._search
-    collector_cls._search = lambda self, keyword: list(_MOCK_NOTES)
+    original_fetch_keyword = collector_cls.fetch_keyword
+    collector_cls.fetch_keyword = lambda self, keyword: (list(_MOCK_ITEMS), "redfox")
     r1 = collectors_base.run_collector("xhs_sample")
     print(f"    结果：{r1.model_dump()}")
     check("fetched=5", r1.fetched == 5)
@@ -293,13 +292,15 @@ def main() -> int:
         heat = session.scalars(select(TagLibrary).where(TagLibrary.tag == "AI工具实测")).one().heat
     check("再拆解一次 heat 累计到 2", heat == 2, f"heat={heat}")
 
-    print("\n[12] 熔断演练（无效 mcp 地址，连续 3 次失败）")
+    print("\n[12] 熔断演练（采样源连续 3 次失败）")
     AlertReceiver.received.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), AlertReceiver)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     config.NOTIFY_WEBHOOK = f"http://127.0.0.1:{server.server_address[1]}/hook"
-    collector_cls._search = original_search
-    config.XHS_MCP_BASE_URL = "http://127.0.0.1:9"  # 无效地址模拟 mcp 不可达
+
+    def failing_fetch(self, keyword):
+        raise RedFoxError("模拟 RedFox 上游故障")
+    collector_cls.fetch_keyword = failing_fetch
     failed = 0
     for _ in range(3):
         try:
@@ -330,8 +331,7 @@ def main() -> int:
     check("人工恢复 200 且计数清零", resp.status_code == 200)
     resp = client.post("/api/admin/collectors/xhs_sample/resume")
     check("未熔断时恢复返回 409", resp.status_code == 409)
-    config.XHS_MCP_BASE_URL = "http://localhost:18060"
-    collector_cls._search = lambda self, keyword: list(_MOCK_NOTES)
+    collector_cls.fetch_keyword = lambda self, keyword: (list(_MOCK_ITEMS), "redfox")
     r3 = collectors_base.run_collector("xhs_sample")
     with session_scope() as session:
         state = session.scalars(select(CollectorState).where(CollectorState.name == "xhs_sample")).one()
@@ -339,7 +339,7 @@ def main() -> int:
           and state.consecutive_failures == 0, f"inserted={r3.inserted}")
     server.shutdown()
     config.NOTIFY_WEBHOOK = ""
-    collector_cls._search = original_search
+    collector_cls.fetch_keyword = original_fetch_keyword
 
     print("\n" + "=" * 46)
     if FAILURES:

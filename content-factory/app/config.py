@@ -75,10 +75,9 @@ COLLECTOR_FAIL_ALERT_AFTER = 3  # 连续失败达到该次数即外发告警
 COLLECTOR_CIRCUIT_FAILURES = int(os.environ.get("CF_COLLECTOR_CIRCUIT_FAILURES", "3"))  # 连续失败达到该次数即熔断
 
 # ---- 小红书采样器 M2（P-1b；只读搜索，禁止任何写/互动接口）----
-# xiaohongshu-mcp 以 Go 独立服务跑在本机 Docker，streamable-http 端点 /mcp
-XHS_MCP_BASE_URL = os.environ.get("XHS_MCP_BASE_URL", "http://localhost:18060").rstrip("/")
-XHS_MCP_TIMEOUT_SECONDS = int(os.environ.get("CF_XHS_MCP_TIMEOUT", "30"))
-# 每轮搜索关键词；留空则取 data/domains.yml 全部领域关键词作为检索词
+# 唯一数据源 RedFox（app/collectors/redfox.py）；曾并存的 xiaohongshu-mcp
+# 本地降级源已于 2026-08-20 废弃
+# 每轮搜索关键词；留空则取启用栏目关键词池 / 领域词表作为检索词
 XHS_SAMPLE_KEYWORDS = [k.strip() for k in os.environ.get("CF_XHS_SAMPLE_KEYWORDS", "").split(",") if k.strip()]
 XHS_SAMPLE_MAX_QUERIES = int(os.environ.get("CF_XHS_SAMPLE_MAX_QUERIES", "20"))
 XHS_SAMPLE_INTERVAL_HOURS = int(os.environ.get("CF_XHS_SAMPLE_INTERVAL_HOURS", "6"))
@@ -104,8 +103,8 @@ XHS_TEARDOWN_WEEKDAY = os.environ.get("CF_XHS_TEARDOWN_WEEKDAY", "mon")
 XHS_TEARDOWN_HOUR = int(os.environ.get("CF_XHS_TEARDOWN_HOUR", "6"))
 
 # ---- RedFox（红狐数据 redfox.hk）：小红书只读数据源，按调用计费 ----
-# 配置 Key 即启用 RedFox 优先采样（结果自带 authorFans，低粉爆款可直接判定），
-# 无 Key 或调用失败自动降级 xiaohongshu-mcp。接口文档见仓库外 redfox-api文档/
+# 采样唯一数据源（结果自带 authorFans，低粉爆款可直接判定）；未配 Key 或
+# 调用失败时采样任务直接失败（无降级源）。接口文档见仓库外 redfox-api文档/
 REDFOX_API_KEY = (os.environ.get("CF_REDFOX_API_KEY") or os.environ.get("REDFOX_API_KEY") or "").strip()
 REDFOX_BASE_URL = os.environ.get("CF_REDFOX_BASE_URL", "https://redfox.hk").rstrip("/")
 # 搜索接口延迟波动大（快时十余秒、慢时超 30s）；掐断在途请求不影响计费却拿不到结果，

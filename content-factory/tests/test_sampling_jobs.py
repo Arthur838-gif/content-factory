@@ -5,10 +5,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from app import config
-from app.collectors import xhs_sample
 from app.db import session_scope
 from app.models import CollectorState, HotItem, SamplingJob
-from app.schemas import HotItem as HotItemSchema
 from app.services import sampling_jobs
 from app.services.worker import SamplingWorker
 
@@ -106,23 +104,6 @@ def test_worker_blocked_when_circuit_open(isolated_env, stub_fetch, monkeypatch)
     assert SamplingWorker().run_once() == "blocked"
     row = sampling_jobs.get_job(job.id)
     assert row.status == "blocked" and stub_fetch == []  # 未发起任何采样
-
-
-def test_worker_degraded_mcp_recorded(isolated_env, stub_fetch, monkeypatch):
-    """RedFox 失败但 mcp 降级成功：任务成功，meta 记降级词（不外发告警）。"""
-    def degraded_fetch(self, keyword):
-        stub_fetch.append(keyword)
-        return [HotItemSchema(source="xhs", title=f"AI {keyword} 笔记",
-                              url=f"https://xhs.test/mcp/{keyword}", fans=100,
-                              likes=10, collects=1, comments=1)], "mcp"
-
-    monkeypatch.setattr(xhs_sample.XhsSampleCollector, "fetch_keyword", degraded_fetch)
-    job, _ = sampling_jobs.enqueue(kind="manual", keywords=["AI工具"])
-    assert SamplingWorker().run_once() == "succeeded"
-    row = sampling_jobs.get_job(job.id)
-    assert row.meta["degraded_keywords"] == ["AI工具"]
-    state = _collector_state()
-    assert state is None or state.consecutive_failures == 0
 
 
 def test_cancel_queued_job(isolated_env):

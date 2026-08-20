@@ -72,14 +72,12 @@ def test_embedded_worker_executes_queued_job(seeded_env, monkeypatch, stub_fetch
 def test_worker_cli_once(seeded_env):
     """独立 worker 命令行 --once：空队列 idle 退出 0；任务失败退出 1。
 
-    子进程无法吃到进程内打桩——用空 RedFox key 强制走 mcp 分支，
-    mcp 指向拒绝连接的本机端口，失败路径全程不联网。
+    子进程无法吃到进程内打桩——两个 RedFox key 环境变量都清空（.env 里任一
+    存在都会激活付费分支）。RedFox 是唯一采样源：无 Key 立即抛错不联网，
+    失败路径全程不联网。
     """
-    # 子进程无法吃到进程内打桩——两个 RedFox key 环境变量都清空（.env 里任一存在
-    # 都会激活付费分支），强制走 mcp；mcp 指向拒绝连接的本机端口，失败路径全程不联网
     env = {**os.environ, "CF_DB_PATH": str(config.DB_PATH),
-           "CF_REDFOX_API_KEY": "", "REDFOX_API_KEY": "",
-           "XHS_MCP_BASE_URL": "http://127.0.0.1:9"}
+           "CF_REDFOX_API_KEY": "", "REDFOX_API_KEY": ""}
     cmd = [sys.executable, "-m", "app.services.worker", "--once"]
 
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=60,

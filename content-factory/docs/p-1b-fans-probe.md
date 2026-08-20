@@ -50,3 +50,15 @@ xiaohongshu-mcp（其 search_feeds 仍无 fans，走人工喂样本降级模式�
   私信、回关、发布等任何账号行为。
 - Cookie、二维码截图、账号信息只进本地 mcp 服务与操作员私有记录，
   不进 Git、不进聊天回复、不进测试快照。
+
+## 数据源变更（2026-08-20）：xiaohongshu-mcp 废弃
+
+xiaohongshu-mcp 本地降级源已从代码整体移除，RedFox 成为唯一采样源：
+
+- 本地 mcp 服务长期未部署，降级路径从未真正可用；RedFox 故障（超时 / 504）
+  降级 mcp 时，报错反而变成「连接被拒绝」，把真实故障原因盖住。
+- mcp 的 search_feeds 不含 fans（上文降级模式结论），对低粉爆款引擎价值有限；
+  RedFox 搜索自带 authorFans，自动判定常态跑通。
+
+本文上方的 mcp 探针方法与降级模式结论保留作历史记录；`probe` 命令现仅测
+RedFox（未配 Key 时返回配 Key 提示，不联网）。

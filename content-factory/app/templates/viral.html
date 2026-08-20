@@ -81,7 +81,6 @@ async function pollJob(jobId, msg) {
     if (j.status === 'queued' || j.status === 'running') { msg.textContent = _jobLine(j) + '…'; continue; }
     let summary = _jobLine(j);
     if (j.status === 'succeeded' && j.viral_created) summary += `，新增爆款 ${j.viral_created} 条`;
-    if ((j.meta || {}).degraded_keywords && j.meta.degraded_keywords.length) summary += `（RedFox 失败降级 mcp：${j.meta.degraded_keywords.length} 个词）`;
     if (j.status === 'failed') summary += `（${j.error_type || '异常'}：${(j.error || '').slice(0, 120)}）`;
     if (j.status === 'blocked') summary += '；先解除熔断再点「重试」';
     msg.textContent = summary;

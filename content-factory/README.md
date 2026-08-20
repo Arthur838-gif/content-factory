@@ -53,18 +53,18 @@ Alembic 迁移、pytest/CI）；此前 P0-P4 文本/出图/素材包/数据飞�
 
 范围仅 M2（小红书采样）+ M3（低粉爆款打分与自动建题）：
 
-- **M2 采样器 `app/collectors/xhs_sample.py`**：经 xiaohongshu-mcp（Docker 本机，
-  `XHS_MCP_BASE_URL`，默认 `http://localhost:18060`）只读调用 `search_notes`；
-  禁止任何写/互动接口。URL 去重、领域过滤沿用采集统一协议。
+- **M2 采样器 `app/collectors/xhs_sample.py`**：RedFox 爆款洞察单源只读采样
+  （按调用计费，需 `REDFOX_API_KEY`）；禁止任何写/互动接口。曾并存的
+  xiaohongshu-mcp 本地降级源已于 2026-08-20 废弃（本地服务未部署，降级只会把
+  RedFox 的真实故障盖成「连接被拒绝」）。URL 去重、领域过滤沿用采集统一协议。
 - **M3 打分 `app/services/radar.py`**：`viral_score = (likes + 2×collects + 3×comments) ÷ max(fans,1)`，
   实时判定纯规则不调 LLM；阈值 `CF_VIRAL_FANS_MAX=5000 / CF_VIRAL_LIKES_MIN=500 / CF_VIRAL_SCORE_MIN=2.0`
   环境变量可热改（P4 校准）。入选样本写 `viral_samples` 并自动建 `topics(source=radar, status=new)`
   （发现不决策），撞题去重走标题 Jaccard ≥ 0.5（`CF_TOPIC_DUPLICATE_JACCARD`）。
-- **fans 探针结论（docs/p-1b-fans-probe.md）**：本开发环境未部署 mcp，`fans_available=false`，
-  走降级模式——自动采样只落 `hot_items` 笔记级数据，低粉爆款经
-  `POST /api/viral-samples/manual`（或管理页 `/viral` 人工喂样本表单）补齐 fans 后进入同一管线。
-  真实环境部署 mcp 后执行 `python -m app.collectors.xhs_sample probe` 重跑探针并更新该文档即可，
-  代码无感切换（条目 fans>0 即自动参与判定）。
+- **fans 探针结论（docs/p-1b-fans-probe.md）**：RedFox 搜索结果自带 authorFans
+  （`fans_available=true`），低粉爆款判定直接跑通；fans 缺失的条目只落
+  `hot_items` 笔记级数据，可经 `POST /api/viral-samples/manual`
+  （或管理页 `/viral` 人工喂样本表单）补齐 fans 后进入同一管线。
 - **周度拆解（附录 A3）**：每周一 06:00 调度（`CF_XHS_TEARDOWN_WEEKDAY/HOUR`），把当周
   `viral_samples` 交 LLM 总结标题模式/情绪词/结构套路，结论回写样本 `reason` 并累计
   `tag_library.heat`；手动触发仅调试用：`POST /api/collectors/xhs_teardown/run`。
@@ -83,18 +83,15 @@ Alembic 迁移、pytest/CI）；此前 P0-P4 文本/出图/素材包/数据飞�
 （0.1 / 2.6 / fans=0 不除零）、落库建题证据、撞题合并（score 取大、evidence 追加）、
 人工喂样本 422/409、A3 幂等入库与 mock 拆解回写、熔断演练（告警一次、409、人工恢复）。
 
-### P-1b 真实质量验收（需专用数据小号与 mcp 服务）
+### P-1b 真实质量验收（需 RedFox Key）
 
-1. 按仓库外操作说明用 Docker 起 xiaohongshu-mcp，专用数据小号扫码登录（凭据不进仓库）；
-   `.env` 配 `XHS_MCP_BASE_URL`。
-2. `.venv/Scripts/python -m app.collectors.xhs_sample probe "AI工具"` 重跑 fans 探针，
-   结论更新进 `docs/p-1b-fans-probe.md`。
-3. 自动模式：连续 3 天采样（`POST /api/collectors/xhs_sample/run` 或等调度）；
-   降级模式：连续 3 天经 `/viral` 页面人工录入。验收线：`viral_samples ≥ 5`，
-   人工抽查过半数"确实值得仿写"。
-4. 熔断演练：`XHS_MCP_BASE_URL` 临时指向无效地址连触 3 次，确认熔断 + 告警一次 + 409；
-   恢复服务后仍需 `POST /api/admin/collectors/xhs_sample/resume` 显式解除。
-5. 采样期间严禁任何关注、点赞、评论、私信、回关、发布操作。
+1. `.env` 配置 `REDFOX_API_KEY`；`.venv/Scripts/python -m app.collectors.xhs_sample probe "AI工具"`
+   重跑 fans 探针，结论更新进 `docs/p-1b-fans-probe.md`。
+2. 连续 3 天采样（`POST /api/collectors/xhs_sample/run`、`/viral` 手动采样或栏目定向采样）；
+   验收线：`viral_samples ≥ 5`，人工抽查过半数"确实值得仿写"。
+3. 熔断演练的结构验收（熔断 + 告警一次 + 409 + 人工恢复）由 `tests/test_p1b.py` 覆盖；
+   真实环境 RedFox 连续故障熔断后，恢复需 `POST /api/admin/collectors/xhs_sample/resume` 显式解除。
+4. 采样期间严禁任何关注、点赞、评论、私信、回关、发布操作。
 
 ## P-2 长期运行基础设施（领域词表入库 + 持久化采样任务 + 迁移/测试）
 
@@ -160,8 +157,8 @@ worker 领取是条件 UPDATE，多 worker 进程不会重复执行同一任务�
 - 当前只绑 `127.0.0.1`，Host/Origin 白名单只防 DNS rebinding 与跨站写，**不是
   用户认证**：暴露到局域网/公网前必须先加认证（反向代理 Basic Auth 或接入登录），
   否则任何人可触发付费采样与删除数据。
-- RedFox 按调用计费：一次手动/定时采样 ≈ 关键词数 次调用（每词最多 1 次 RedFox、
-  失败降级 mcp 不重复计费）；任务去重与熔断是主要的防误触机制，`CF_XHS_SAMPLE_SCHEDULED=false`
+- RedFox 按调用计费：一次手动/定时采样 ≈ 关键词数 次调用（每词最多 1 次）；
+  任务去重与熔断是主要的防误触机制，`CF_XHS_SAMPLE_SCHEDULED=false`
   可完全关闭定时采样只留手动。
 
 ### 测试与 CI
@@ -173,7 +170,7 @@ worker 领取是条件 UPDATE，多 worker 进程不会重复执行同一任务�
 ```
 
 - GitHub Actions（`.github/workflows/tests.yml`）：装依赖 → `alembic upgrade head`
-  空库升级 → pytest → `run_all.py`。全程离线（LLM mock / RedFox 桩 / 本地 mock mcp），
+  空库升级 → pytest → `run_all.py`。全程离线（LLM mock / RedFox 桩 / 采样桩），
   不消耗任何付费 API；真实 RedFox/LLM 验收保持显式手动。
 - `run_all.py` 覆盖的验收脚本各自用临时库隔离，绝不写 `data/app.db`；
   `_run_real_acceptance.py` 的数据库/素材/备份全部重定向到输出目录。

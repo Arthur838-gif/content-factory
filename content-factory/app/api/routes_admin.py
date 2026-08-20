@@ -30,7 +30,7 @@ def trigger_collector(name: str):
 
     xhs_sample 是付费采样，P-2 起只入队：返回 202 + 任务详情，
     由 worker 领取执行，进度走 /api/sampling/jobs/{id}。
-    其余 name：409 = 采集器已熔断（需人工恢复）；502 = mcp 等上游失败（失败计数 +1）。
+    其余 name：409 = 采集器已熔断（需人工恢复）；502 = RedFox 等上游失败（失败计数 +1）。
     502 detail 只回类型化摘要，不回 repr(exc)——异常文本可能带内部路径/地址。
     """
     if name == "xhs_sample":

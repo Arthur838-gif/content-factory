@@ -20,7 +20,7 @@ ACCEPTANCE_SCRIPTS = [
     "test_p0.py",      # 选题→生成→落库主干（LLM mock）
     "test_p1.py",      # 小红书文案结构
     "test_p1a.py",     # 热榜采集 + 手动触发
-    "test_p1b.py",     # 低粉爆款采样 + 熔断（本地 mock mcp）
+    "test_p1b.py",     # 低粉爆款采样 + 熔断（采样桩不联网）
     "test_redfox.py",  # RedFox 响应解析（文档示例桩，不联网）
     "test_p2.py",      # 图片合成
     "test_p3.py",      # 预览页 + 素材包

@@ -5,7 +5,6 @@
 - worker（app.services.worker）claim_next() 原子领取后逐关键词执行，
   每个关键词一个事务：素材入库与任务进度同事务落库，崩溃最多丢当前词；
 - collector_state 仍只管熔断（连续失败计数），不混入任务进度；
-- RedFox 失败但 mcp 降级成功 → 记进 job.meta.degraded_keywords，不算失败；
 - 全关键词零抓取 → succeeded_empty（合法结果，不触发熔断）。
 
 状态机：queued → running → succeeded / succeeded_empty / failed / blocked / canceled

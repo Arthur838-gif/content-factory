@@ -3,8 +3,8 @@
 执行模型：
 - 每个关键词一个事务：素材入库（URL 去重 + 领域过滤 + 低粉爆款判定）与
   任务进度（计数器/当前词/心跳/租约）同事务落库，崩溃最多丢当前关键词；
-- RedFox 单词失败自动降级 mcp（降级词记 job.meta，不算任务失败）；
-  两源全挂才判任务失败，走 collector_state 熔断计数（与同步路径同一语义）；
+- RedFox 单源：单词失败即任务失败（xiaohongshu-mcp 降级源已废弃），
+  走 collector_state 熔断计数（与同步路径同一语义）；
 - 全关键词零抓取 → succeeded_empty：合法空结果，成功不熔断；
 - 领取时发现熔断 → blocked（等待人工恢复后重试）。
 
@@ -151,10 +151,6 @@ class SamplingWorker:
                 sources = dict(meta.get("sources") or {})
                 sources[keyword] = source
                 meta["sources"] = sources
-                if source == "mcp":
-                    degraded = list(meta.get("degraded_keywords") or [])
-                    degraded.append(keyword)
-                    meta["degraded_keywords"] = degraded
                 row.meta = meta
                 logger.info(
                     "任务 #%s 进度 %s/%s（%s：%s 抓取 / %s 入库）",

@@ -137,7 +137,7 @@ def create_scheduler() -> BackgroundScheduler:
         coalesce=True, max_instances=1,
     )
     # xhs 采样默认不排程（RedFox 计费，走 /viral 页手动触发）；
-    # 排程时也不随启动立即执行（mcp 未部署时避免启动即连败熔断）
+    # 排程时也不随启动立即执行（上游抖动/未配 Key 时避免启动即连败熔断）
     if config.XHS_SAMPLE_SCHEDULED:
         scheduler.add_job(
             job_xhs_sample, "interval", hours=config.XHS_SAMPLE_INTERVAL_HOURS, id="xhs_sample",
