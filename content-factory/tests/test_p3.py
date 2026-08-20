@@ -93,6 +93,8 @@ def main() -> int:
           and html.find("DeepSeek 发布新一代") < html.find("大模型价格战再起"))
     check("radar 来源徽标 + 双端操作按钮",
           '>radar<' in html and "generate(1,'wechat',this)" in html and "generate(1,'xhs',this)" in html)
+    check("灵感选题区带直触采样按钮（入队 xhs_sample）",
+          "runSampleJob" in html and "/api/sampling/jobs" in html and "采样一轮" in html)
 
     print("\n[2] 预览页 GET /articles/{id}（xhs ready）")
     resp = client.get(f"/articles/{aid1}")

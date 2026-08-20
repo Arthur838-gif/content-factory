@@ -17,7 +17,7 @@
 {% for j in latest_jobs %}
 <div class="muted">最近任务 #{{ j.id }} {{ {'queued': '排队中', 'running': '运行中', 'succeeded': '成功', 'succeeded_empty': '成功（空）', 'failed': '失败', 'blocked': '熔断拦截', 'canceled': '已取消'}.get(j.status, j.status) }} {{ j.completed_queries }}/{{ j.total_queries }}{% if j.status == 'running' and j.current_keyword %}（{{ j.current_keyword }}）{% endif %}{% if j.status == 'failed' %}（{{ j.error_type }}）{% endif %}</div>
 {% endfor %}
-<span class="muted">{% if xhs_scheduled %}定时采样运行中，也可手动补采（<a href="/viral">素材采样</a>）{% else %}手动触发（<a href="/viral">素材采样</a>）{% endif %}</span></div>
+<span class="muted">{% if xhs_scheduled %}定时采样运行中，也可手动补采（<a href="/#idea-topics">灵感选题区</a>）{% else %}手动触发（<a href="/#idea-topics">灵感选题区</a> 或 <a href="/viral">素材采样</a>）{% endif %}</span></div>
 {% endif %}
 <div class="card stat"><strong>灵感池</strong><span class="muted">一次性选题</span><div class="big">{{ idea_topics|length }}</div><span class="muted"><a href="/viral">爆款样本</a> 持续供给</span></div>
 </div>
@@ -45,8 +45,11 @@
 {% endfor %}
 {% else %}<div class="card muted">暂无栏目。先到 <a href="/pillars">内容栏目</a> 建栏目并生成本周计划。</div>{% endif %}
 
-{# 备选：灵感选题（radar 爆款仿写 / 手动），按评分倒序 #}
-<h2 id="idea-topics">灵感选题 <span class="muted">（一次性 · 按评分）</span></h2>
+{# 备选：灵感选题（radar 爆款仿写 / 手动），按评分倒序；低粉爆款样本同源，
+   「采样一轮」直接入队 RedFox 七日爆款采样任务，完成后两处一起刷新 #}
+<div class="field-title"><h2 id="idea-topics" style="margin:0">灵感选题 <span class="muted">（一次性 · 按评分）</span></h2>
+<div class="actions"><button onclick="runSampleJob(this)" title="按栏目关键词池调 RedFox 七日爆款接口（按调用计费），完成后本页自动刷新">采样一轮</button></div></div>
+<p class="muted" id="sample-msg">低粉爆款样本与灵感选题同源：采样一轮 = 调用小红书七日爆款接口，新样本和选题会一起出现在这里。</p>
 {% if idea_topics %}<div class="card"><table><thead><tr><th>选题</th><th>领域 / 来源</th><th>评分</th><th>状态</th><th>保鲜</th><th>最新生成</th><th>操作</th></tr></thead><tbody>
 {% for topic in idea_topics %}<tr>
 <td><strong>{{ topic.title }}</strong><br><span class="muted">{{ topic.angle }}</span></td>
@@ -56,13 +59,60 @@
 <td>{% if topic.expires_at %}{% if topic.expires_at < now %}<span class="badge failed">已过期</span>{% else %}{{ topic.expires_at.strftime('%m-%d %H:%M') }}{% endif %}{% else %}<span class="muted">不适用</span>{% endif %}</td>
 <td>{% set rows=latest.get(topic.id,{}) %}{% for platform,article in rows.items() %}<a class="badge {{ article.status }}" href="/articles/{{ article.id }}">{{ platform }} · {{ article.status }}</a> {% else %}<span class="muted">暂无</span>{% endfor %}</td>
 <td><div class="actions"><button onclick="generate({{ topic.id }},'wechat',this)">生成公众号</button><button onclick="generate({{ topic.id }},'xhs',this)">生成小红书</button></div></td></tr>{% endfor %}
-</tbody></table></div>{% else %}<div class="card muted">暂无灵感选题，去 <a href="/viral">素材采样</a> 触发采集。</div>{% endif %}
+</tbody></table></div>{% else %}<div class="card muted">暂无灵感选题，点上方「采样一轮」或去 <a href="/viral">素材采样</a> 触发采集。</div>{% endif %}
 <script>
 async function archiveTopic(id, btn) {
   if (!confirm('归档该选题？将移出本周排期（已生成的文章保留），让位给按主题重排的新选题。')) return;
   btn.disabled = true;
   const r = await fetch(`/api/topics/${id}/archive`, {method: 'PUT'});
   if (r.ok) location.reload(); else alert('归档失败：' + (((await r.json().catch(() => ({}))).detail) || r.status));
+}
+// ---- 灵感选题区直触采样（与 /viral 的手动采样同一 API：入队 → 轮询 → 刷新）----
+const JOB_STATUS = {queued: '排队中', running: '运行中', succeeded: '成功', succeeded_empty: '成功（空结果）', failed: '失败', blocked: '被熔断拦截', canceled: '已取消'};
+async function runSampleJob(btn) {
+  const msg = document.getElementById('sample-msg');
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = '入队中…';
+  try {
+    const r = await fetch('/api/sampling/jobs', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({collector: 'xhs_sample'})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.textContent = `入队失败（${r.status}）：${d.detail || ''}`; return; }
+    if (!d.created) {
+      msg.textContent = `已有采样任务在排队/运行（任务 #${d.job.id} ${d.job.completed_queries}/${d.job.total_queries}），不重复计费。`;
+      return;
+    }
+    await pollJob(d.job.id, msg);
+  } catch (err) {
+    msg.textContent = '采样请求失败：' + err;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+async function pollJob(jobId, msg) {
+  // 终态即停并刷新本页（灵感选题 + 采样引擎卡片一起更新）；2 分钟无终态也停
+  for (let i = 0; i < 60; i++) {
+    await new Promise(res => setTimeout(res, 2000));
+    let j = null;
+    try { const r = await fetch(`/api/sampling/jobs/${jobId}`); if (r.ok) j = await r.json(); } catch (_) {}
+    if (!j) { msg.textContent = `任务 #${jobId} 查询失败，稍后刷新本页查看。`; return; }
+    if (j.status === 'queued' || j.status === 'running') {
+      msg.textContent = `任务 #${jobId} ${JOB_STATUS[j.status]}：${j.completed_queries}/${j.total_queries} 个关键词`
+        + (j.status === 'running' && j.current_keyword ? `（当前：${j.current_keyword}）` : '') + '…';
+      continue;
+    }
+    let summary = `任务 #${jobId} ${JOB_STATUS[j.status] || j.status}：抓取 ${j.fetched} 条 / 入库 ${j.inserted} 条`;
+    if (j.status === 'succeeded' && j.viral_created) summary += ` / 新增爆款 ${j.viral_created} 条`;
+    if (j.status === 'failed') summary += `（${j.error_type || '异常'}：${(j.error || '').slice(0, 120)}）`;
+    if (j.status === 'blocked') summary += '；已熔断，到素材采样页解除后重试';
+    msg.textContent = summary;
+    await new Promise(res => setTimeout(res, 1200));
+    location.reload();
+    return;
+  }
+  msg.textContent = `任务 #${jobId} 仍在执行（长任务可稍后刷新本页）。`;
 }
 </script>
 {% endblock %}
