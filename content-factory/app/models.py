@@ -324,6 +324,44 @@ class SamplingJob(Base):
     )
 
 
+class ModelConfig(Base):
+    """model_configs：大模型配置（文案/图片各自的「当前使用」运行时可切换）。
+
+    页面（/models）维护多组供应商配置，每个 purpose（text/image）至多一条
+    is_active；无 active 行时调用方回退 .env 的 OPENAI_*（兼容存量部署）。
+    api_key 明文存本地库（data/ 已 gitignore 的单机工具），API/页面只回掩码。
+    """
+
+    __tablename__ = "model_configs"
+    __table_args__ = (
+        Index(
+            "uq_model_configs_active_purpose",
+            "purpose",
+            unique=True,
+            sqlite_where=text("is_active"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(16), comment="text=文案 / image=图片")
+    name: Mapped[str] = mapped_column(String(64), unique=True, comment="显示名，如 GLM-4.7 文案主力")
+    base_url: Mapped[str] = mapped_column(String(256))
+    api_key: Mapped[str] = mapped_column(String(256))
+    model: Mapped[str] = mapped_column(String(128), comment="调用时的 model 参数")
+    price_input_per_m: Mapped[float | None] = mapped_column(
+        nullable=True, comment="元/百万输入 token；空=回退 env 默认"
+    )
+    price_output_per_m: Mapped[float | None] = mapped_column(
+        nullable=True, comment="元/百万输出 token；空=回退 env 默认"
+    )
+    disable_thinking: Mapped[str | None] = mapped_column(
+        String(8), nullable=True, comment="空=按模型名自动（glm 前缀）/ on / off"
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, comment="每用途至多一条")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
 ALL_MODELS = (
     Topic,
     Prompt,
@@ -339,4 +377,5 @@ ALL_MODELS = (
     Domain,
     DomainKeyword,
     SamplingJob,
+    ModelConfig,
 )

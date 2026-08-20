@@ -187,6 +187,17 @@ worker 领取是条件 UPDATE，多 worker 进程不会重复执行同一任务�
 
 `test_p3.py` 覆盖选题台排序和雷达来源、文章预览与受控素材访问、内存 ZIP 素材包、模板新版本与启停热更新、发布回填和目录穿越防护。
 
+## 模型配置页（运行时切换文案/图片模型）
+
+`/models` 维护多套大模型配置（名称、base_url、api_key、模型名、单价、思维链开关），**文案与图片各自设一个「当前使用」**，页面点一下即切换，下一次生成/出图即刻生效，无需重启或改 `.env`。
+
+- 解析链：`model_config.resolve(purpose)` 每次调用前查库——该用途的 active 行优先，无则回退 `.env` 的 `OPENAI_*`（图片用途模型名回退 `GLM_IMAGE_MODEL`）。`.env` 从此只是回退默认，现有部署不配页面照常跑。
+- mock 判定：显式 `CF_LLM_MOCK=1` 强制 mock；否则当前生效配置有 api_key 就真实调用（页面配了 key 而 .env 没配的场景由此支持），无 key 自动 mock 降级。
+- 单价按模型配置折算：`meta.usage.model` 记实际调用的模型名、`cost_est` 用该配置的单价（空则回退 env 默认），`/stats` 成本报表按当月出现过的各模型分别列单价——多模型并存成本归因不失真。历史 usage 数据不追溯重算。
+- 图片生成受 `.env` 的 `CF_IMAGEGEN_ENABLED` 总闸控制（防误计费硬开关）：总闸关时页面配了图片模型也不出图；封面提示词归纳仍走文案模型。
+- api_key 安全：明文只存本地 `data/app.db`（`data/` 已 gitignore）；API/页面/日志一律掩码（`sk_ab****1234`），编辑表单不回填明文，留空即保持原 key。「测试」按钮对文案模型发 `max_tokens=8` 的极小请求，对图片模型发最小出图请求（**会真实计费 1 张**，页面上有确认提示）。
+- 接口：`GET/POST /api/models`、`PUT/DELETE /api/models/{id}`、`POST /api/models/{id}/activate`、`POST /api/models/{id}/test`；迁移 `0003_model_configs` 启动自动执行。
+
 ## Non-goals（明确不做，计划书第 2 章）
 | --- | --- |
 | 小红书自动化发布（Playwright、Cookie 注入、MCP 发布等一切形态） | 平台无官方发布 API，脚本发布触发风控，矩阵号限流封号风险不可接受 |
@@ -310,10 +321,12 @@ curl --noproxy '*' -X POST "http://127.0.0.1:8000/api/topics/1/generate?platform
   `.venv/bin/python -m app.services.notify WARN test 通道演练 "P-1a 验收"`。
 - `data/domains.yml`：领域关键词表的种子导入源（P-2 起词表存数据库，运行时改词表
   走 `/api/domains`，见「P-2 领域词表」）；命中才入库并自动建选题。
-- `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `MODEL_NAME`（P0 起）：产品内 LLM，OpenAI 兼容协议 +
-  强制 JSON mode，只依赖这三个环境变量，供应商切换不改代码。**未配置 `OPENAI_API_KEY` 时
-  自动走 mock 降级**（返回固定 JSON、`meta.usage.model="mock"`），用于无 Key 跑通链路结构；
-  配 Key 后自动走真实 HTTP 调用。超时（默认 60s）、`max_tokens` 上限、单价等集中在 `config.py`。
+- `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `MODEL_NAME`（P0 起）：产品内 LLM 的**回退默认**
+  （OpenAI 兼容协议 + 强制 JSON mode）。日常切换模型用 `/models` 模型配置页（见上文
+  「模型配置页」）；未设「当前使用」的用途才落到这三个变量。**当前生效配置没有
+  api_key 时自动走 mock 降级**（返回固定 JSON、`meta.usage.model="mock"`），用于无 Key
+  跑通链路结构；配 Key 后自动走真实 HTTP 调用。超时（默认 120s）、`max_tokens` 上限、
+  回退单价等集中在 `config.py`。
 - `data/sensitive_wechat.txt` / `data/sensitive_xhs.txt`：双端敏感词表（P1 起双端齐备），
   改词表不改代码；命中即标 `status=failed` 并在 `error` 注明命中词。空表/少量占位，
   冷启动由人工整理后滚动扩充。

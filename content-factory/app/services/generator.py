@@ -4,12 +4,16 @@
 最终产出 articles 行所需的 (内容对象, meta.usage, error)。
 
 设计要点：
-- LLM 客户端只依赖 OPENAI_BASE_URL / OPENAI_API_KEY / MODEL_NAME 三个环境变量，
-  httpx 直连 OpenAI 兼容协议 /chat/completions + response_format=json_object，免引 SDK。
-- 无 Key 降级（config.LLM_MOCK）：返回符合 Schema 的固定 JSON，usage 写占位值（model="mock"）。
-  mock 与真实路径并列、由开关分流；mock 是脚手架，不让真实路径走样。
+- LLM 参数（base_url / api_key / 模型名 / 单价）每次调用前经
+  model_config.resolve(text) 解析：/models 页的「当前使用」优先，无则回退
+  .env 的 OPENAI_*——页面切换即刻生效，无需重启。httpx 直连 OpenAI 兼容协议
+  /chat/completions + response_format=json_object，免引 SDK。
+- 无 Key 降级（model_config.mock_enabled）：返回符合 Schema 的固定 JSON，
+  usage 写占位值（model="mock"）。mock 与真实路径并列、由开关分流；
+  mock 是脚手架，不让真实路径走样。
 - 重试：最多 2 次重试（共 3 轮），重试时把上一轮错误信息追加进 user 消息。
-- 成本记账：meta.usage = {prompt_tokens, completion_tokens, model, cost_est}，每次生成必写。
+- 成本记账：meta.usage = {prompt_tokens, completion_tokens, model, cost_est}，
+  每次生成必写；model 用实际调用的模型名、单价取该配置（多模型成本归因不失真）。
 - 超时与 max_tokens 上限集中在 config.py（第 8.3 节）。
 """
 import json
@@ -23,7 +27,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from .. import config
-from . import sensitive
+from . import model_config, sensitive
 
 logger = logging.getLogger(__name__)
 
@@ -134,51 +138,60 @@ def _mock_usage() -> dict:
 
 
 # ---- 成本估算 ----
-def _estimate_cost(prompt_tokens: int, completion_tokens: int) -> float:
+def _estimate_cost(prompt_tokens: int, completion_tokens: int, llm: model_config.ResolvedLLM) -> float:
     return round(
-        prompt_tokens / 1_000_000 * config.LLM_PRICE_INPUT_PER_M
-        + completion_tokens / 1_000_000 * config.LLM_PRICE_OUTPUT_PER_M,
+        prompt_tokens / 1_000_000 * llm.price_input_per_m
+        + completion_tokens / 1_000_000 * llm.price_output_per_m,
         6,
     )
 
 
-def _usage_from_response(resp_usage: dict) -> dict:
+def _usage_from_response(resp_usage: dict, llm: model_config.ResolvedLLM) -> dict:
     pt = int(resp_usage.get("prompt_tokens", 0) or 0)
     ct = int(resp_usage.get("completion_tokens", 0) or 0)
     return {
-        "model": config.MODEL_NAME,
+        "model": llm.model,
         "prompt_tokens": pt,
         "completion_tokens": ct,
-        "cost_est": _estimate_cost(pt, ct),
+        "cost_est": _estimate_cost(pt, ct, llm),
     }
 
 
-def _empty_usage() -> dict:
-    return {"model": config.MODEL_NAME, "prompt_tokens": 0, "completion_tokens": 0, "cost_est": 0.0}
+def _empty_usage(llm: model_config.ResolvedLLM) -> dict:
+    return {"model": llm.model, "prompt_tokens": 0, "completion_tokens": 0, "cost_est": 0.0}
 
 
-def _merge_usage(accum: dict, one: dict) -> dict:
-    """多轮重试的 token 累计（每轮都计费）。model 取配置值。"""
+def _merge_usage(accum: dict, one: dict, llm: model_config.ResolvedLLM) -> dict:
+    """多轮重试的 token 累计（每轮都计费）。model 取实际调用的模型。"""
     pt = accum["prompt_tokens"] + one.get("prompt_tokens", 0)
     ct = accum["completion_tokens"] + one.get("completion_tokens", 0)
     return {
-        "model": config.MODEL_NAME,
+        "model": llm.model,
         "prompt_tokens": pt,
         "completion_tokens": ct,
-        "cost_est": _estimate_cost(pt, ct),
+        "cost_est": _estimate_cost(pt, ct, llm),
     }
 
 
 # ---- 真实 LLM 调用（httpx 直连 OpenAI 兼容协议）----
-def _call_llm(system_msg: str, user_msg: str) -> tuple[str, dict]:
-    """调 /chat/completions，强制 JSON mode。返回 (content, usage)；失败抛异常。"""
-    url = f"{config.OPENAI_BASE_URL}/chat/completions"
+def _call_llm(
+    system_msg: str, user_msg: str, llm: model_config.ResolvedLLM | None = None
+) -> tuple[str, dict]:
+    """调 /chat/completions，强制 JSON mode。返回 (content, usage)；失败抛异常。
+
+    base_url / key / 模型名 / thinking 参数由当前生效配置决定（/models 页
+    「当前使用」> .env 回退）——切换模型无需重启。llm 传入时用之（一次
+    生成内保持一致），否则每次现解析（titles / 封面提示词等直呼场景）。
+    """
+    if llm is None:
+        llm = model_config.resolve(model_config.PURPOSE_TEXT)
+    url = f"{llm.base_url}/chat/completions"
     headers = {
-        "Authorization": f"Bearer {config.OPENAI_API_KEY}",
+        "Authorization": f"Bearer {llm.api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": config.MODEL_NAME,
+        "model": llm.model,
         "messages": [
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
@@ -186,7 +199,7 @@ def _call_llm(system_msg: str, user_msg: str) -> tuple[str, dict]:
         "response_format": {"type": "json_object"},  # 强制 JSON mode
         "max_tokens": config.LLM_MAX_TOKENS,
     }
-    if config.LLM_DISABLE_THINKING:
+    if llm.disable_thinking:
         # bigmodel GLM-4.5+ 参数：关思维链。产物是结构化 JSON 文案，不需要
         # 思考段——省 token（思考与正文同额计费）、提速、杜绝思考烧尽额度
         payload["thinking"] = {"type": "disabled"}
@@ -203,7 +216,7 @@ def _call_llm(system_msg: str, user_msg: str) -> tuple[str, dict]:
             f"LLM 输出被截断或为空（finish_reason={choice.get('finish_reason')}，"
             f"max_tokens={config.LLM_MAX_TOKENS}，思维链与正文共享此额度）"
         )
-    usage = _usage_from_response(data.get("usage") or {})
+    usage = _usage_from_response(data.get("usage") or {}, llm)
     return content, usage
 
 
@@ -248,7 +261,7 @@ def generate(
     check_sensitive=False 仅限非发布产物（如周度拆解的模式总结），是唯一豁免口。
     """
     # ---- 取得成文（mock 或真实 LLM）----
-    if config.LLM_MOCK:
+    if model_config.mock_enabled(model_config.PURPOSE_TEXT):
         article: T | None = _mock_article(schema_cls)
         usage = _mock_usage()
         logger.info("mock 降级生成完成（platform=%s）", platform)
@@ -282,8 +295,10 @@ def _real_generate(platform, schema_cls, system_msg, user_msg) -> tuple[T | None
     返回 (article, usage, error)：失败时 article=None，usage 仍累计已消耗
     token（每轮都计费），error 供调用方写 articles.error。
     4xx（429 除外）是请求本身的问题，重试不会好——直接放弃不烧重试。
+    开头 resolve 一次、整个生成过程用同一份配置（多轮重试不因页面切换而中途换模型）。
     """
-    accum_usage = _empty_usage()
+    llm = model_config.resolve(model_config.PURPOSE_TEXT)
+    accum_usage = _empty_usage(llm)
     last_error: str | None = None
     article: T | None = None
 
@@ -297,8 +312,8 @@ def _real_generate(platform, schema_cls, system_msg, user_msg) -> tuple[T | None
                 "请修正问题，严格按要求的 JSON 格式重新输出，不要输出任何其他内容。"
             )
         try:
-            content, usage = _call_llm(system_msg, user)
-            accum_usage = _merge_usage(accum_usage, usage)
+            content, usage = _call_llm(system_msg, user, llm)
+            accum_usage = _merge_usage(accum_usage, usage, llm)
             article = _parse_and_validate(content, schema_cls)
             last_error = None
             break  # 校验通过

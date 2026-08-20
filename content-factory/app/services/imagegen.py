@@ -8,7 +8,10 @@
   大字直出不可靠，A3 实测结论）；
 - 本模块任何失败（无 key / 超时 / 接口报错）都返回 None，调用方回退到
   版式纯色底——出图增强绝不把 article 拖成 failed；
-- LLM_MOCK / 无 key 时直接返回 None，测试链路零联网。
+- 出图模型经 model_config.resolve(image) 解析（/models 页「当前使用」>
+  .env 回退），与文案模型互独立；封面提示词归纳仍走文案模型；
+- CF_IMAGEGEN_ENABLED 是防误计费的总闸；总闸关或生效配置无 key 即跳过
+  真实出图，测试链路零联网。
 """
 import io
 import json
@@ -18,7 +21,7 @@ import httpx
 from PIL import Image
 
 from .. import config
-from . import generator
+from . import generator, model_config
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +42,7 @@ _PROMPT_RULES = (
 def cover_prompt(title: str, content: str, tags: list[str]) -> str:
     """从文案内容归纳画面提示词；LLM 失败时退回标题+标签的确定性提示词。"""
     fallback = f"小红书笔记背景图，主题：{title}，风格：{'、'.join(tags[:3])}，画面精致有氛围感，无文字"
-    if config.LLM_MOCK:
+    if model_config.mock_enabled(model_config.PURPOSE_TEXT):
         return fallback
     user = (
         f"笔记标题：{title}\n标签：{'、'.join(tags[:6])}\n"
@@ -55,17 +58,22 @@ def cover_prompt(title: str, content: str, tags: list[str]) -> str:
 
 
 def generate_background(prompt: str, width: int, height: int) -> Image.Image | None:
-    """cogview-4 文生图返回 PIL 图（按画布比例取尺寸档再缩放）；失败返回 None。"""
-    if config.LLM_MOCK or not config.OPENAI_API_KEY or not config.IMAGEGEN_ENABLED:
+    """文生图返回 PIL 图（按画布比例取尺寸档再缩放）；失败返回 None。
+
+    图片模型走 model_config.resolve(image)（/models 页「当前使用」> .env 回退）；
+    CF_IMAGEGEN_ENABLED 是防误计费总闸，关掉或生效配置无 key 一律跳过。
+    """
+    if not config.IMAGEGEN_ENABLED or model_config.mock_enabled(model_config.PURPOSE_IMAGE):
         return None
+    llm = model_config.resolve(model_config.PURPOSE_IMAGE)
     size = _pick_size(width, height)
-    url = f"{config.OPENAI_BASE_URL}/images/generations"
+    url = f"{llm.base_url}/images/generations"
     try:
         with httpx.Client(timeout=config.IMAGEGEN_TIMEOUT_SECONDS) as client:
             resp = client.post(
                 url,
-                headers={"Authorization": f"Bearer {config.OPENAI_API_KEY}"},
-                json={"model": config.GLM_IMAGE_MODEL, "prompt": prompt,
+                headers={"Authorization": f"Bearer {llm.api_key}"},
+                json={"model": llm.model, "prompt": prompt,
                       "size": size, "n": 1},
             )
             resp.raise_for_status()

@@ -29,7 +29,7 @@ def test_lifespan_seeds_and_serves(isolated_env):
         assert "AI与编程" in names and "学习教育" in names and len(names) == 27
         with session_scope() as s:
             assert s.query(Prompt).count() > 0
-        for path in ("/", "/pillars", "/viral", "/stats", "/prompts"):
+        for path in ("/", "/pillars", "/viral", "/stats", "/prompts", "/models"):
             assert client.get(path).status_code == 200, path
 
 

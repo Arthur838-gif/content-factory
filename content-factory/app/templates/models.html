@@ -1,0 +1,210 @@
+{% extends "base.html" %}{% block title %}模型配置 · 内容工厂{% endblock %}
+{% block content %}
+<h1>模型配置</h1>
+<p class="muted">维护多套大模型配置，文案与图片各自指定「当前使用」——切换即刻生效于下一次生成 / 出图，无需重启。未设「当前使用」的用途回退 .env 的 OPENAI_* 默认值。api_key 只存本机数据库，页面与接口永远只显示掩码。</p>
+
+<h2>文案模型</h2>
+<div id="status-text" class="card"></div>
+<div id="table-text" class="card"></div>
+
+<h2>图片模型</h2>
+<div id="status-image" class="card"></div>
+<div id="table-image" class="card"></div>
+
+<div id="editor" class="card" hidden>
+  <h2 id="editor-title">新增配置</h2>
+  <form id="config-form">
+    <input type="hidden" id="f-id"><input type="hidden" id="f-purpose">
+    <label>名称</label><input id="f-name" required maxlength="64" placeholder="如 GLM-4.7 文案主力">
+    <label>base_url（OpenAI 兼容接口根地址）</label><input id="f-base-url" required maxlength="256" placeholder="https://open.bigmodel.cn/api/paas/v4">
+    <label>api_key</label><input id="f-api-key" type="password" maxlength="256" autocomplete="off" placeholder="sk-…">
+    <label>模型名（调用时的 model 参数）</label><input id="f-model" required maxlength="128" placeholder="如 glm-4.7 / deepseek-chat / cogview-4">
+    <label>单价（元 / 百万 token，留空回退 .env 默认价）</label>
+    <div style="display:flex;gap:10px"><div style="flex:1"><span class="muted">输入</span><input id="f-pin" type="number" step="any" min="0"></div><div style="flex:1"><span class="muted">输出</span><input id="f-pout" type="number" step="any" min="0"></div></div>
+    <label>关思维链（GLM 系建议关：产物是结构化 JSON，思考段纯烧 token）</label>
+    <select id="f-thinking"><option value="">自动（模型名 glm 前缀即关）</option><option value="on">强制关</option><option value="off">保持开</option></select>
+    <p class="actions" style="margin-top:12px"><button>保存</button> <button type="button" class="secondary" onclick="closeForm()">取消</button></p>
+  </form>
+</div>
+
+<script>
+// 渲染一律 DOM 节点 + textContent（模板安全不变量，见 test_lifespan 守卫用例）
+const PURPOSE_LABEL = {text: '文案', image: '图片'};
+let state = null;
+const $ = id => document.getElementById(id);
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') node.className = v;
+    else if (k === 'text') node.textContent = v;
+    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  node.append(...children.filter(c => c != null));
+  return node;
+}
+
+async function load() {
+  const r = await fetch('/api/models');
+  state = await r.json();
+  render();
+}
+
+function render() {
+  for (const purpose of ['text', 'image']) {
+    renderStatus(purpose);
+    renderTable(purpose);
+  }
+}
+
+function renderStatus(purpose) {
+  const box = $('status-' + purpose);
+  const p = state.purposes[purpose];
+  const res = p.resolved;
+  box.replaceChildren(
+    el('p', null,
+      el('strong', {text: res.source === 'db' ? `当前使用：${res.name}` : '当前回退 .env'}), '　',
+      el('code', {text: res.model}), ` @ ${res.base_url}　key：`,
+      el('code', {text: res.api_key_masked || '未配置'})));
+  if (p.mock_enabled) {
+    box.append(el('p', {class: 'notice',
+      text: `当前生效配置没有 api_key：${PURPOSE_LABEL[purpose]}生成处于 mock 降级（返回固定内容，不调真实模型）。`}));
+  }
+  if (purpose === 'image' && !state.imagegen_enabled) {
+    box.append(el('p', {class: 'notice',
+      text: '图片生成总闸（.env 的 CF_IMAGEGEN_ENABLED）当前是关：就算这里配好模型也不会出图。要出图请把它改为 true 或删掉该行，重启后生效。'}));
+  }
+}
+
+function renderTable(purpose) {
+  const box = $('table-' + purpose);
+  const rows = state.configs.filter(c => c.purpose === purpose);
+  box.replaceChildren();
+  if (rows.length) {
+    const thead = el('thead');
+    thead.append(el('tr', null,
+      ...['名称 / 状态', '模型', 'base_url', 'api_key', '单价', '思维链', '操作'].map(h => el('th', {text: h}))));
+    const tbody = el('tbody');
+    for (const c of rows) tbody.append(cfgRow(c));
+    box.append(el('table', null, thead, tbody));
+  } else {
+    box.append(el('p', {class: 'muted', text: '还没有配置，当前用 .env 回退。'}));
+  }
+  box.append(el('p', {class: 'actions', style: 'margin-top:10px'},
+    el('button', {text: `新增${PURPOSE_LABEL[purpose]}模型配置`, onclick: () => openForm(purpose)})));
+}
+
+function cfgRow(c) {
+  const price = c.price_input_per_m != null
+    ? `入 ${c.price_input_per_m} / 出 ${c.price_output_per_m} 元/M` : '默认（.env）';
+  const thinking = c.disable_thinking === 'on' ? '强制关'
+    : c.disable_thinking === 'off' ? '保持开' : '自动';
+  const actions = el('td', {class: 'actions'});
+  if (!c.is_active) {
+    actions.append(el('button', {class: 'secondary', text: '设为当前', onclick: () => activateCfg(c.id)}));
+  }
+  actions.append(
+    el('button', {class: 'secondary', text: '编辑', onclick: () => editCfg(c.id)}),
+    el('button', {class: 'secondary', text: '测试', onclick: e => testCfg(c.id, e.currentTarget)}),
+    el('button', {class: 'secondary', text: '删除', onclick: () => delCfg(c.id)}));
+  return el('tr', null,
+    el('td', null, el('strong', {text: c.name}), ' ',
+      c.is_active ? el('span', {class: 'badge ready', text: '当前使用'})
+                  : el('span', {class: 'badge', text: '备用'})),
+    el('td', null, el('code', {text: c.model})),
+    el('td', {class: 'muted', text: c.base_url}),
+    el('td', null, el('code', {text: c.api_key_masked || '未填'})),
+    el('td', {class: 'muted', text: price}),
+    el('td', {class: 'muted', text: thinking}),
+    actions);
+}
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  if (r.ok) return null;
+  const d = await r.json().catch(() => ({}));
+  throw new Error(d.detail || ('HTTP ' + r.status));
+}
+
+async function activateCfg(id) {
+  try { await api(`/api/models/${id}/activate`, {method: 'POST'}); load(); }
+  catch (e) { alert('切换失败：' + e.message); }
+}
+
+async function delCfg(id) {
+  const c = state.configs.find(x => x.id === id);
+  if (!confirm(`删除配置「${c.name}」？${c.is_active ? '\n它当前是「当前使用」，删除后该用途回退 .env。' : ''}`)) return;
+  try { await api(`/api/models/${id}`, {method: 'DELETE'}); load(); }
+  catch (e) { alert('删除失败：' + e.message); }
+}
+
+async function testCfg(id, btn) {
+  const c = state.configs.find(x => x.id === id);
+  if (c.purpose === 'image' && !confirm('图片模型测试会真实出图 1 张（计费），继续？')) return;
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = '测试中…';
+  try {
+    const r = await fetch(`/api/models/${id}/test`, {method: 'POST'});
+    const d = await r.json().catch(() => ({}));
+    if (d.ok) alert(`✅ 连通正常：${d.detail}（${d.latency_ms} ms）`);
+    else alert(`❌ 不通：${d.detail || 'HTTP ' + r.status}`);
+  } catch (e) { alert('测试请求失败：' + e); }
+  finally { btn.disabled = false; btn.textContent = original; }
+}
+
+function openForm(purpose) {
+  $('f-id').value = '';
+  $('f-purpose').value = purpose;
+  $('editor-title').textContent = `新增${PURPOSE_LABEL[purpose]}模型配置`;
+  for (const fid of ['f-name', 'f-base-url', 'f-api-key', 'f-model', 'f-pin', 'f-pout']) $(fid).value = '';
+  $('f-api-key').placeholder = '必填';
+  $('f-thinking').value = '';
+  $('editor').hidden = false;
+  $('editor').scrollIntoView();
+}
+
+function editCfg(id) {
+  const c = state.configs.find(x => x.id === id);
+  $('f-id').value = c.id;
+  $('f-purpose').value = c.purpose;
+  $('editor-title').textContent = `编辑：${c.name}`;
+  $('f-name').value = c.name;
+  $('f-base-url').value = c.base_url;
+  $('f-api-key').value = '';
+  $('f-api-key').placeholder = '留空 = 保持不变';
+  $('f-model').value = c.model;
+  $('f-pin').value = c.price_input_per_m ?? '';
+  $('f-pout').value = c.price_output_per_m ?? '';
+  $('f-thinking').value = c.disable_thinking || '';
+  $('editor').hidden = false;
+  $('editor').scrollIntoView();
+}
+
+function closeForm() { $('editor').hidden = true; }
+
+$('config-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const id = $('f-id').value;
+  const body = {
+    purpose: $('f-purpose').value,
+    name: $('f-name').value.trim(),
+    base_url: $('f-base-url').value.trim(),
+    api_key: $('f-api-key').value.trim(),
+    model: $('f-model').value.trim(),
+    price_input_per_m: $('f-pin').value === '' ? null : Number($('f-pin').value),
+    price_output_per_m: $('f-pout').value === '' ? null : Number($('f-pout').value),
+    disable_thinking: $('f-thinking').value || null,
+  };
+  try {
+    await api(id ? `/api/models/${id}` : '/api/models', {
+      method: id ? 'PUT' : 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    closeForm(); load();
+  } catch (e2) { alert('保存失败：' + e2.message); }
+});
+
+load();
+</script>
+{% endblock %}

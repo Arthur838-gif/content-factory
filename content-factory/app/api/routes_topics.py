@@ -18,7 +18,7 @@ from ..adapters import xhs as xhs_adapter
 from ..db import session_scope
 from ..models import Article, TagLibrary, Topic
 from ..schemas import WechatArticle, XhsNote
-from ..services import generator, imagegen, imaging, prompt_engine, titles
+from ..services import generator, imagegen, imaging, model_config, prompt_engine, titles
 from ..services.prompt_engine import PromptNotFoundError, TemplateRenderError
 
 logger = logging.getLogger(__name__)
@@ -320,7 +320,8 @@ def _persist_generation(
 
     logger.info(
         "生成完成 topic=%s platform=%s article=%s status=%s mock=%s",
-        topic_id, platform, article_id, status, config.LLM_MOCK,
+        topic_id, platform, article_id, status,
+        model_config.mock_enabled(model_config.PURPOSE_TEXT),
     )
     return GenerateResponse(
         article_id=article_id, status=status, platform=platform, error=error

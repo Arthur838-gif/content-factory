@@ -6,8 +6,7 @@
 import json
 import logging
 
-from .. import config
-from . import generator, prompt_engine
+from . import generator, model_config, prompt_engine
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,7 @@ def score(title: str, keyword: str = "") -> dict:
     title = (title or "").strip()
     if not title:
         raise ValueError("标题不能为空")
-    if config.LLM_MOCK:
+    if model_config.mock_enabled(model_config.PURPOSE_TEXT):
         return dict(_MOCK)
     from ..db import session_scope
 

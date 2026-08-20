@@ -16,6 +16,7 @@ from .api import (
     routes_articles,
     routes_discovery,
     routes_domains,
+    routes_models,
     routes_pages,
     routes_pillars,
     routes_prompts,
@@ -103,6 +104,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_pillars.router)
     app.include_router(routes_discovery.router)
     app.include_router(routes_domains.router)
+    app.include_router(routes_models.router)
     app.include_router(routes_sampling.router)
     app.include_router(routes_pages.router)
 

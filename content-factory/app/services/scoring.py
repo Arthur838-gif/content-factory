@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from .. import config
 from ..db import session_scope
 from ..models import Article, Prompt, PublishRecord, Topic, ViralSample
-from . import radar
+from . import model_config, radar
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +203,7 @@ def cost_report(month: str | None = None, db_path=None) -> dict:
 
     month_platforms: dict[str, dict] = {}
     history: dict[str, dict[str, dict]] = {}
+    month_models: set[str] = set()
     for article in articles:
         usage = _usage_of(article)
         if usage["model"] == "mock":
@@ -213,6 +214,7 @@ def cost_report(month: str | None = None, db_path=None) -> dict:
         _accumulate(history.setdefault(ym, {}), article.platform, usage)
         if ym == target:
             _accumulate(month_platforms, article.platform, usage)
+            month_models.add(usage["model"])
 
     def _platform_view(articles_by_platform: dict) -> dict:
         view = {}
@@ -244,12 +246,33 @@ def cost_report(month: str | None = None, db_path=None) -> dict:
             }
         )
     xhs = platforms.get("xhs")
+
+    def _model_prices() -> list[dict]:
+        # 当月出现过的模型及各自单价（多模型并存时成本归因不失真的关键）；
+        # 查不到配置或没填单价的模型回退 .env 默认价并标注来源
+        rows = []
+        for name in sorted(month_models):
+            prices = model_config.price_for(name)
+            rows.append(
+                {
+                    "model": name,
+                    "input_per_m": prices[0] if prices else config.LLM_PRICE_INPUT_PER_M,
+                    "output_per_m": prices[1] if prices else config.LLM_PRICE_OUTPUT_PER_M,
+                    "price_source": "model_configs" if prices else "env_default",
+                }
+            )
+        return rows
+
     return {
         "month": target,
         "price": {
             "input_per_m": config.LLM_PRICE_INPUT_PER_M,
             "output_per_m": config.LLM_PRICE_OUTPUT_PER_M,
-            "basis": "估算口径：cost_est 按配置单价折算；单价未按当前供应商官方价修正前不作账单依据",
+            "models": _model_prices(),
+            "basis": (
+                "估算口径：cost_est 按生成时各模型配置单价（/models 页）折算，"
+                "未配置单价的模型回退 .env 默认价；未按供应商官方价修正前不作账单依据"
+            ),
         },
         "platforms": platforms,
         "total": total,

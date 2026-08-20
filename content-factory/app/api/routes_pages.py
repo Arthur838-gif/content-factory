@@ -267,3 +267,13 @@ def prompts_page(request: Request):
             for prompt in prompt_rows
         ]
     return templates.TemplateResponse(request=request, name="prompts.html", context={"prompts": prompts})
+
+
+@router.get("/models")
+def models_page(request: Request):
+    """模型配置页：文案/图片两区 + 新增/编辑内联表单。
+
+    数据不服务端渲染——前端 fetch /api/models（与 API 同一数据源），切换/编辑后
+    重取即刷新，页面与接口永远一致。
+    """
+    return templates.TemplateResponse(request=request, name="models.html", context={})

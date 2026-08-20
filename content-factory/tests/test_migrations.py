@@ -38,9 +38,9 @@ def test_empty_db_upgrades_to_head(isolated_env):
     db_path, _ = isolated_env
     head = _head_revision()
     assert _current_revision(db_path) == head
-    # P-2 三表 + 基线业务表全部就位
+    # P-2 三表 + 模型配置表 + 基线业务表全部就位
     tables = _table_names(db_path)
-    assert {"domains", "domain_keywords", "sampling_jobs"} <= tables
+    assert {"domains", "domain_keywords", "sampling_jobs", "model_configs"} <= tables
     assert {"topics", "articles", "hot_items", "pillars"} <= tables
     # 再跑一次幂等
     assert migrate_db(db_module.get_engine(db_path), db_path) == head

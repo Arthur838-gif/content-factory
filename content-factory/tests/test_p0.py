@@ -203,7 +203,8 @@ def _run_realpath_tests() -> None:
         bad = '{"title": "x"}'  # 缺 digest / content_md，校验失败
         calls = {"i": 0}
 
-        def side(system, user):
+        # _real_generate 会传第三参 llm（一次生成内固定同一份生效配置）
+        def side(system, user, llm=None):
             calls["i"] += 1
             if calls["i"] < 3:
                 return bad, {"prompt_tokens": 10, "completion_tokens": 5}
