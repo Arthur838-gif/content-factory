@@ -79,6 +79,11 @@ def _seed_hot_items() -> None:
         # 标题不含关键词，但由栏目关键词采样回来（raw.keyword）→ 应命中
         HotItem(source="xhs", title="深度体验分享（标题不带关键词）",
                 url="https://xhs/a7", fans=700, likes=2500, raw={"keyword": "AIGC"}),
+        # P9 联动：公众号素材同池参与排期（阅读量口径指标进 evidence）
+        HotItem(source="gzh", title="AI工具效率指南（公众号）",
+                url="https://mp.weixin.qq.com/s/p1", fans=0, likes=1200, collects=30, comments=8,
+                raw={"article": {"readCount": 26000, "watchCount": 90, "shareCount": 300},
+                     "keyword": "AI工具"}),
     ]
     with session_scope() as session:
         session.add_all(rows)
@@ -112,7 +117,7 @@ def main() -> int:
     plan = client.post("/api/pillars/plan").json()
     by_name = {x["pillar"]: x for x in plan}
     check("合集档新增 1 期", len(by_name["本周5个值得装的AI工具"]["created"]) == 1, str(plan))
-    check("多期档新增 3 期（素材只有 4 条命中，取 3）", len(by_name["AI工具深挖"]["created"]) == 3, str(plan))
+    check("多期档新增 3 期（素材 5 条命中，取 3）", len(by_name["AI工具深挖"]["created"]) == 3, str(plan))
     with session_scope() as session:
         pillar_topics = session.scalars(
             select(Topic).where(Topic.source == "pillar").order_by(Topic.id)).all()
@@ -121,10 +126,11 @@ def main() -> int:
         week_start, week_end = pillar_service.week_bounds()
         check("合集标题带周期区间", collection[0].title.startswith("本周5个值得装的AI工具（")
               and "–" in collection[0].title, collection[0].title)
-        check("合集 evidence 带 5 条素材快照（无美食/上周旧文）",
+        check("合集 evidence 带 5 条素材快照（含 gzh 文章，赞 1200 挤掉 a4；无美食/上周旧文）",
               len(collection[0].evidence["items"]) == 5
               and {it["url"] for it in collection[0].evidence["items"]}
-              == {"https://xhs/a1", "https://xhs/a2", "https://xhs/a3", "https://xhs/a4", "https://xhs/a7"})
+              == {"https://xhs/a1", "https://xhs/a2", "https://xhs/a3",
+                  "https://mp.weixin.qq.com/s/p1", "https://xhs/a7"})
         check("多期每期绑一条素材且 URL 不重复",
               len({t.evidence["items"][0]["url"] for t in multi}) == 3
               and all(len(t.evidence["items"]) == 1 for t in multi))
@@ -196,8 +202,9 @@ def main() -> int:
     check("新建表单领域为可选可填（input+datalist）、带关键词推荐容器",
           'id="domain-input"' in page.text and 'id="domain-options"' in page.text
           and 'id="kw-chips"' in page.text)
-    check("启用栏目行带定向采样入口（采样一轮 + 进度状态区）",
-          "采样一轮" in page.text and 'id="sample-status"' in page.text
+    check("启用栏目行带定向采样入口（小红书 + 公众号采样一轮 + 进度状态区）",
+          "采样一轮" in page.text and "公众号采样一轮" in page.text
+          and 'id="sample-status"' in page.text
           and "samplePillar(" in page.text)
 
     print("\n[8] P5b 周主题：生成（mock）/ 素材不足拦截 / 确认")
@@ -380,6 +387,19 @@ def main() -> int:
     s16c = client.post(f"/api/pillars/{pid_m}/sample")
     check("词池为空 422（[6] 已清空该栏目关键词）",
           s16c.status_code == 422, f"{s16c.status_code} {str(s16c.json())[:80]}")
+    s16d = client.post(f"/api/pillars/{pid_c}/sample?collector=gzh_sample")
+    b16d = s16d.json()
+    check("公众号定向采样 202（collector=gzh_sample、独立去重键与小红书任务并行）",
+          s16d.status_code == 202 and b16d["created"] is True
+          and b16d["job"]["collector"] == "gzh_sample"
+          and b16d["job"]["keywords"] == ["AI工具", "AIGC"]
+          and b16d["job"]["id"] != b16["job"]["id"], str(b16d)[:160])
+    s16e = client.post(f"/api/pillars/{pid_c}/sample?collector=gzh_sample")
+    check("公众号连点去重（同采集器在跑即复用，不重复计费）",
+          s16e.status_code == 202 and s16e.json()["created"] is False
+          and s16e.json()["job"]["id"] == b16d["job"]["id"], str(s16e.json())[:120])
+    s16f = client.post(f"/api/pillars/{pid_c}/sample?collector=bogus")
+    check("白名单外 collector 422", s16f.status_code == 422, str(s16f.status_code))
 
     print()
     if FAILURES:

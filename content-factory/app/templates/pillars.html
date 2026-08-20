@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block title %}内容栏目 · 内容工厂{% endblock %}
 {% block content %}<h1>内容栏目 <span class="muted">（{{ week_range}} 本周）</span></h1>
-<p class="muted">栏目 = 可持续系列：固定名称 + 固定角度结构 + 每周期数 + 专属采样关键词。点「生成本周计划」按节奏从当周采样素材派生选题（进选题台，source=pillar）。</p>
+<p class="muted">栏目 = 可持续系列：固定名称 + 固定角度结构 + 每周期数 + 专属采样关键词。点「生成本周计划」按节奏从当周采样素材（小红书 / 公众号 / GitHub 同池）派生选题（进选题台，source=pillar）。</p>
 {% if pillars %}<div class="card"><table><thead><tr><th>栏目</th><th>节奏</th><th>本周已排</th><th>关键词池</th><th>状态</th><th>操作</th></tr></thead><tbody>
 {% for p in pillars %}<tr>
 <td><strong>{{ p.name }}</strong><br><span class="muted">{{ p.angle[:60] }}{% if p.angle|length > 60 %}…{% endif %}</span></td>
@@ -9,7 +9,7 @@
 <td>{% for kw in (p.keywords or []) %}<span class="badge">{{ kw }}</span> {% endfor %}</td>
 <td><span class="badge {{ 'ready' if p.active else 'archived' }}">{{ '启用' if p.active else '停用' }}</span></td>
 <td><div class="actions">
-{% if p.active %}<button class="secondary" onclick="samplePillar({{ p.id }}, this)">采样一轮</button>{% endif %}
+{% if p.active %}<button class="secondary" onclick="samplePillar({{ p.id }}, this, 'xhs_sample')">采样一轮</button><button class="secondary" onclick="samplePillar({{ p.id }}, this, 'gzh_sample')" title="按该栏目关键词池调公众号优质库接口（每关键词计费 1 次）">公众号采样一轮</button>{% endif %}
 <button class="secondary" onclick="renamePillar({{ p.id }}, this)">改名</button>
 <button class="secondary" onclick="togglePillar({{ p.id }}, {{ 'false' if p.active else 'true' }}, this)">{{ '停用' if p.active else '启用' }}</button>
 <button class="secondary" onclick="delPillar({{ p.id }}, this)">删除</button>
@@ -178,13 +178,15 @@ async function _waitSampling(jobId, status) {
   status.textContent = '采样仍在后台执行（长任务）：稍后刷新查看，素材入库后即可排期。';
   await new Promise(res => setTimeout(res, 2000));
 }
-async function samplePillar(id, btn) {
-  // 单栏目定向采样：只采这一栏的词池（按词计费），共用建栏目自动采样的去重键
+async function samplePillar(id, btn, collector) {
+  // 单栏目定向采样：只采这一栏的词池（按词计费）；collector 区分小红书/公众号
+  if (collector === 'gzh_sample'
+      && !confirm(`按该栏目关键词池调公众号优质库采样（每关键词计费 1 次）？`)) return;
   const status = document.getElementById('sample-status');
   const original = btn.textContent;
   btn.disabled = true; status.textContent = '正在入队…';
   try {
-    const r = await fetch(`/api/pillars/${id}/sample`, {method: 'POST'});
+    const r = await fetch(`/api/pillars/${id}/sample?collector=${collector}`, {method: 'POST'});
     const d = await r.json();
     if (!r.ok) { status.textContent = ''; alert(d.detail || '采样入队失败'); return; }
     if (!d.created) { status.textContent = `该栏目已有采样任务在排队/运行（#${d.job.id}），不重复计费。`; return; }

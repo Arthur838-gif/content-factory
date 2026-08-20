@@ -296,6 +296,58 @@ def test_gzh_default_keywords_resolution(isolated_env, monkeypatch):
     assert created and job.keywords == ["词A", "词B"]
 
 
+# ---- 栏目联动：定向采样 + 素材池（P9 后补）----
+
+def test_pillar_gzh_sampling_endpoint(isolated_env):
+    """栏目定向采样支持公众号采集器：独立去重键与小红书并行不挤占。"""
+    from app.main import app
+    from app.models import Pillar
+
+    with session_scope() as session:
+        pillar = Pillar(name="AI 工具周报", domain="AI与编程", slots_per_week=1,
+                        keywords=["AI工具", "AIGC"], active=True)
+        session.add(pillar)
+        session.flush()
+        pid = pillar.id
+    client = TestClient(app)
+    r = client.post(f"/api/pillars/{pid}/sample?collector=gzh_sample")
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["created"] is True
+    assert body["job"]["collector"] == "gzh_sample" and body["job"]["kind"] == "pillar"
+    assert body["job"]["keywords"] == ["AI工具", "AIGC"] and body["job"]["pillar_id"] == pid
+    # 去重键按采集器分开：小红书任务与公众号任务可并存
+    rx = client.post(f"/api/pillars/{pid}/sample?collector=xhs_sample")
+    assert rx.status_code == 202 and rx.json()["created"] is True
+    # 同采集器连点 → 复用在跑任务不重复计费
+    r2 = client.post(f"/api/pillars/{pid}/sample?collector=gzh_sample")
+    assert r2.status_code == 202 and r2.json()["created"] is False
+    assert r2.json()["job"]["id"] == body["job"]["id"]
+    # 白名单外采集器 422
+    assert client.post(f"/api/pillars/{pid}/sample?collector=hotboard").status_code == 422
+
+
+def test_matched_pool_includes_gzh(seeded_env):
+    """素材池三源同吃：gzh 文章参与栏目周排期与主题规划（raw.keyword 归队）。"""
+    from app.models import Pillar
+    from app.services import pillar as pillar_service
+
+    with session_scope() as session:
+        pillar = Pillar(name="AI 工具周报", domain="AI与编程", slots_per_week=1,
+                        keywords=["AI工具"], active=True)
+        session.add(pillar)
+        # 标题不含关键词，但 raw.keyword 记录了采样词 → 靠采样词归队
+        gzh_row = HotItem(source="gzh", title="五个提升效率的智能助手",
+                          url="https://mp.weixin.qq.com/s/pool1", author="号", fans=0,
+                          likes=500, collects=10, comments=5,
+                          raw={"article": {"readCount": 30000}, "keyword": "AI工具"})
+        session.add(gzh_row)
+        session.flush()
+        week_start, _ = pillar_service.week_bounds()
+        matched = pillar_service._matched_pool(session, pillar, week_start)
+        assert [(i.id, kw) for i, kw in matched] == [(gzh_row.id, "AI工具")]
+
+
 # ---- 手动喂公众号样本（URL 抓取式） ----
 
 _DETAIL = {

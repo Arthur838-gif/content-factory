@@ -207,7 +207,8 @@ worker 领取是条件 UPDATE，多 worker 进程不会重复执行同一任务�
 
 ## P9 公众号数据链路（优质库采样 → 建题 → 生成 → 发布闭环）
 
-- **RedFox 优质库采样**：`searchArticle`（sortType=`_4` 最热，每关键词 1 页 20 条 = 1 次计费，offset 翻页留待深采）。`GzhSampleCollector`（`gzh_sample`）与 xhs 同一套持久化采样队列（入队 → 逐关键词执行 → 进度落库），入口：工作台灵感选题区「公众号采样」/ 素材采样页；**不进定时任务**（计费纪律，定时仍仅 xhs）。关键词优先级同 xhs：显式传入 > `CF_GZH_SAMPLE_KEYWORDS` > 启用栏目词池 > 领域词表，上限 `CF_GZH_SAMPLE_MAX_QUERIES`（默认 20）。
+- **RedFox 优质库采样**：`searchArticle`（sortType=`_4` 最热，每关键词 1 页 20 条 = 1 次计费，offset 翻页留待深采）。`GzhSampleCollector`（`gzh_sample`）与 xhs 同一套持久化采样队列（入队 → 逐关键词执行 → 进度落库），入口：工作台灵感选题区「公众号采样」/ 素材采样页 / 栏目页「公众号采样一轮」；**不进定时任务**（计费纪律，定时仍仅 xhs）。关键词优先级同 xhs：显式传入 > `CF_GZH_SAMPLE_KEYWORDS` > 启用栏目词池 > 领域词表，上限 `CF_GZH_SAMPLE_MAX_QUERIES`（默认 20）。
+- **栏目联动**：公众号素材与小红书/GitHub 同池参与「生成本周计划」与周主题规划（点赞当热度，evidence 带阅读/在看/分享口径；标题未命中词池时靠采样词 `raw.keyword` 归队）；栏目页定向采样支持公众号——`POST /api/pillars/{id}/sample?collector=gzh_sample`（confirm 后才发，每关键词计费 1 次；去重键按采集器分开，与小红书任务并行不挤占，同采集器连点仍复用在跑任务）。
 - **爆款判定（阅读量口径）**：优质库无粉丝字段，不复制「低粉」概念——`gzh_viral_score = (likes + watches + 2×collects + 3×shares + 3×comments) ÷ max(reads,1)`，入选条件 `reads ≥ CF_GZH_READS_MIN（默认 10000）且 score ≥ CF_GZH_SCORE_MIN（默认 0.08）`（阅读量是互动密度的分母，下限属于指标有效性而非预筛）。**gzh 条目绝不走 xhs 判定**——fans 恒 0 会让爆文率除以 1、全数误判。reads/watches/shares 存 `raw.article`，evidence 快照一并带上。阈值与初值口径记录在 `docs/p4-calibration.md`，校准视图（`/stats`）按源分流复判。
 - **手动喂样本（URL 抓取式）**：素材采样页贴公众号文章链接 + 领域 → `queryArticleDetail`（1 次计费，confirm 后才发）抓全量指标与正文 → 与自动采样同一打分/落库/撞题/建题管线。比手填互动数准确；URL 重复 409（**计费调用前先查重**，不白花），RedFox 失败 502 不写半成品。接口：`POST /api/viral-samples/gzh-manual`。
 - **生成质量**：`WechatArticle` 平台硬上限校验（标题 30 字 / 摘要 54 字折叠位 / 正文 3000 字，超限生成失败进重试、报错拼进提示自纠）；`prompts/wechat_article.yml` 升 v2（接 P5b 系列上下文 + 标签候选 + 公众号写作规范：开头钩子 200-300 / 主体 800-1000 二级标题分段 / 结尾收束 200-300 + 互动引导），v1 行保留、选模板自动取 enabled 最大版本；标题打分平台化——wechat 四维（赛道匹配 15 / 点击诱因 35 / 结构合规 15 / 爆文潜质 35，0-100 制，S≥90/A≥70/B≥50）与 xhs 六维（0-10 制）同响应 JSON 形状，文章页按钮按平台出「四维打分 / 六维打分」。

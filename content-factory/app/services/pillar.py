@@ -95,15 +95,17 @@ def matched_pool_size(session, pillar: Pillar) -> int:
 def _matched_pool(session, pillar: Pillar, week_start: datetime) -> list[tuple[HotItem, str]]:
     """本周命中栏目关键词的采样素材（点赞倒序），主题规划与排期共用。
 
-    xhs 笔记（玩法/情绪素材）与 github 项目（P7 真实工具素材，star 数当热度）
-    同池：合集优先吃到真实项目，深挖也可能绑到开源项目（深挖一个项目也是好内容）。
+    xhs 笔记（玩法/情绪素材）、github 项目（P7 真实工具素材，star 数当热度）
+    与 gzh 文章（P9 优质库素材，点赞当热度）同池：合集优先吃到真实项目，
+    深挖也可能绑到开源项目（深挖一个项目也是好内容）。gzh 条目带
+    raw.keyword（采样词），标题未命中词池也能靠它归队。
     """
     keywords = list(pillar.keywords or [])
     pool = session.scalars(
         select(HotItem)
         .where(
             HotItem.captured_at >= week_start,
-            HotItem.source.in_(("xhs", "github")),
+            HotItem.source.in_(("xhs", "github", "gzh")),
         )
         .order_by(desc(HotItem.likes), desc(HotItem.id))
     ).all()

@@ -5,7 +5,7 @@
 """
 import logging
 import shutil
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, StringConstraints
@@ -98,12 +98,15 @@ def pillar_materials(pillar_id: int) -> dict:
 
 
 @router.post("/pillars/{pillar_id}/sample", status_code=202)
-def sample_pillar(pillar_id: int) -> dict:
+def sample_pillar(
+    pillar_id: int, collector: Literal["xhs_sample", "gzh_sample"] = "xhs_sample"
+) -> dict:
     """对单个栏目当前关键词池入队一轮定向采样（只花这个栏目的钱，按词计费）。
 
     建栏目自动采样之外的单栏目补采入口（素材不足 / 想刷新素材时用）。
-    与建栏目共用 pillar:{id} 去重键：该栏目已有排队/运行任务时返回在跑
-    任务（created=False）不重复计费；熔断 409 与手动采样口径一致。
+    collector 选小红书七日爆款或公众号优质库；去重键按采集器分开
+    （pillar:{id} / pillar:{id}:gzh_sample），两条计费流互不挤占，
+    同采集器仍是「在跑就复用」不重复计费；熔断 409 与手动采样口径一致。
     """
     with session_scope() as session:
         pillar = session.get(Pillar, pillar_id)
@@ -112,15 +115,20 @@ def sample_pillar(pillar_id: int) -> dict:
         keywords = list(pillar.keywords or [])
     if not keywords:
         raise HTTPException(422, "该栏目关键词池为空，无法定向采样")
-    if circuit_open("xhs_sample"):
+    if circuit_open(collector):
         raise HTTPException(
             409,
-            "采集器 xhs_sample 已熔断；到「素材采样」页解除熔断后再触发",
+            f"采集器 {collector} 已熔断；到「素材采样」页解除熔断后再触发",
         )
+    # 小红书沿用历史键（在跑的旧任务不受影响）；公众号独立键防跨采集器误判重复
+    dedupe_key = (
+        f"pillar:{pillar_id}" if collector == "xhs_sample"
+        else f"pillar:{pillar_id}:{collector}"
+    )
     try:
         job, created = sampling_jobs.enqueue(
-            kind="pillar", collector="xhs_sample", keywords=keywords,
-            pillar_id=pillar_id, dedupe_key=f"pillar:{pillar_id}",
+            kind="pillar", collector=collector, keywords=keywords,
+            pillar_id=pillar_id, dedupe_key=dedupe_key,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
