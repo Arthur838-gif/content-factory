@@ -73,7 +73,14 @@ class SamplingWorker:
 
     # ---- 内部 ----
     def _execute(self, job_id: int) -> str:
+        from ..collectors.gzh_sample import GzhSampleCollector
         from ..collectors.xhs_sample import XhsSampleCollector
+
+        # 关键词型采样器分发表；其它采集器（热榜/GitHub 等）走同步接口
+        samplers: dict[str, type] = {
+            "xhs_sample": XhsSampleCollector,
+            "gzh_sample": GzhSampleCollector,
+        }
 
         with session_scope(self.db_path) as session:
             job = session.get(SamplingJob, job_id)
@@ -94,8 +101,7 @@ class SamplingWorker:
             logger.warning("任务 #%s 被熔断拦截（blocked）", job_id)
             return "blocked"
 
-        if collector_name != "xhs_sample":
-            # 本轮只把关键词型采样器搬上队列；其它采集器走同步接口
+        if collector_name not in samplers:
             sampling_jobs.finish_job(
                 job_id, "failed", error_type="unsupported_collector",
                 error=f"worker 暂不支持采集器 {collector_name} 的异步执行",
@@ -103,7 +109,7 @@ class SamplingWorker:
             )
             return "failed"
 
-        collector = XhsSampleCollector(keywords=keywords)
+        collector = samplers[collector_name](keywords=keywords)
         pending = keywords[done:]
         logger.info("任务 #%s 开始执行：关键词 %s 个（续跑 %s，第 %s 次尝试）",
                     job_id, len(keywords), len(pending), attempts)

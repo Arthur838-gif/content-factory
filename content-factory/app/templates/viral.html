@@ -1,13 +1,13 @@
 {% extends "base.html" %}{% block title %}素材采样 · 内容工厂{% endblock %}
 {% block content %}<h1>素材采样</h1>
-<p class="muted">素材引擎运维页：{% if scheduled %}采集器按 <a href="/pillars">内容栏目</a> 的关键词池每 {{ interval_hours }} 小时定时采样，也可在下方手动触发{% else %}定时采样已关闭（RedFox 按调用计费，改为在下方按 <a href="/pillars">内容栏目</a> 的关键词池手动触发）{% endif %}，低粉爆款样本沉淀为 <a href="/#idea-topics">灵感选题</a>；拿不到粉丝数时可人工补录。发布效果回流见 <a href="/stats">报表</a>。</p>
+<p class="muted">素材引擎运维页：{% if scheduled %}采集器按 <a href="/pillars">内容栏目</a> 的关键词池每 {{ interval_hours }} 小时定时采样（定时仅小红书；公众号按调用计费，只手动触发），也可在下方手动触发{% else %}定时采样已关闭（RedFox 按调用计费，改为在下方按 <a href="/pillars">内容栏目</a> 的关键词池手动触发）{% endif %}；小红书走低粉爆款判定、公众号走优质库阅读量 + 互动密度判定，样本沉淀为 <a href="/#idea-topics">灵感选题</a>。发布效果回流见 <a href="/stats">报表</a>。</p>
 
 <div class="card"><h3>采集器状态</h3>
 <table><thead><tr><th>采集器</th><th>状态</th><th>连续失败</th><th>最近错误</th><th>操作</th></tr></thead><tbody>
 {% for state in states %}<tr><td>{{ labels.get(state.name, state.name) }}<br><span class="muted">{{ state.name }}</span></td><td><span class="badge {{ 'failed' if state.status == 'open' else 'ready' }}">{{ '熔断' if state.status == 'open' else '正常' }}</span></td><td>{{ state.consecutive_failures }}</td><td><span class="muted">{{ (state.last_error or '')[:160] }}</span></td>
 <td><div class="actions"><button onclick="runCollector('{{ state.name }}')">立即采样</button><button class="secondary" onclick="resumeCollector('{{ state.name }}')">解除熔断</button></div></td></tr>{% endfor %}
 </tbody></table>
-<p class="actions"><button class="secondary" onclick="runSampleJob()">手动采样一轮（xhs_sample，入队执行）</button><button class="secondary" onclick="runTeardown()">立即周度拆解（调试）</button></p>
+<p class="actions"><button class="secondary" onclick="runSampleJob('xhs_sample')">小红书采样一轮（入队执行）</button><button class="secondary" onclick="runSampleJob('gzh_sample')">公众号采样一轮（入队执行）</button><button class="secondary" onclick="runTeardown()">立即周度拆解（调试）</button></p>
 <p class="muted" id="collector-msg"></p></div>
 
 <div class="card"><h3>采样任务</h3>
@@ -26,7 +26,7 @@
 </tbody></table>{% else %}<p class="muted">暂无任务；点上方「手动采样一轮」或到 <a href="/pillars">内容栏目</a> 建栏目自动采样。</p>{% endif %}</div>
 
 <div class="card"><h3>人工喂样本（降级模式入口）</h3>
-<p class="muted">采样拿不到粉丝数时，在此补齐笔记链接与互动数据；录入后与机器采样走同一打分、落库、撞题与建题管线。</p>
+<p class="muted">小红书采样拿不到粉丝数时，在此补齐笔记链接与互动数据；公众号直接贴文章链接，调 RedFox 详情接口自动抓全量指标（每条 1 次计费）。录入后与机器采样走同一打分、落库、撞题与建题管线。</p>
 <div class="grid"><div>
   <label>笔记链接</label><input id="f-url" placeholder="https://www.xiaohongshu/explore/...">
   <label>标题</label><input id="f-title" placeholder="笔记标题">
@@ -41,12 +41,18 @@
     <div><label>评论</label><input id="f-comments" type="number" min="0" value="0"></div>
   </div>
 </div></div>
-<p class="actions"><button onclick="feedSample()">录入样本</button></p>
+<p class="actions"><button onclick="feedSample()">录入样本</button><span class="muted">小红书：手填指标，零计费</span></p>
+<div class="grid" style="margin-top:8px"><div>
+  <label>公众号文章链接</label><input id="g-url" placeholder="https://mp.weixin.qq.com/s/..." style="width:100%">
+</div><div>
+  <label>领域（可下拉选或手填）</label><input id="g-domain" list="f-domain-options" placeholder="如：AI与编程 / 学习教育">
+</div></div>
+<p class="actions"><button onclick="feedGzhSample()">抓取并录入（计费 1 次）</button><span class="muted">公众号：按链接调 RedFox 详情接口，指标自动到位</span></p>
 <p class="muted" id="feed-msg"></p></div>
 
-<div class="card"><h3>低粉爆款样本</h3>
-{% if samples %}<table><thead><tr><th>样本</th><th>领域</th><th>爆文率</th><th>粉丝 / 点赞 / 收藏 / 评论</th><th>标题模式</th><th>拆解结论</th><th>入库时间</th></tr></thead><tbody>
-{% for s in samples %}<tr><td><a href="{{ s.item.url if s.item.url and s.item.url.startswith(('http://','https://')) else '#' }}" target="_blank" rel="noopener">{{ s.item.title }}</a><br><span class="muted">{{ s.item.author or '未知作者' }}</span></td><td>{{ s.domain }}</td><td><strong>{{ "%.2f"|format(s.viral_score) }}</strong></td><td class="muted">{{ s.item.fans }} / {{ s.item.likes }} / {{ s.item.collects }} / {{ s.item.comments }}</td><td>{{ s.title_pattern or '' }}</td><td>{{ (s.reason or '')[:120] }}</td><td class="muted">{{ s.created_at }}</td></tr>{% endfor %}
+<div class="card"><h3>爆款样本</h3>
+{% if samples %}<table><thead><tr><th>样本</th><th>领域</th><th>爆文率</th><th>互动数据</th><th>标题模式</th><th>拆解结论</th><th>入库时间</th></tr></thead><tbody>
+{% for s in samples %}<tr><td><a href="{{ s.item.url if s.item.url and s.item.url.startswith(('http://','https://')) else '#' }}" target="_blank" rel="noopener">{{ s.item.title }}</a><br><span class="muted">{{ s.item.author or '未知作者' }} · <span class="badge">{{ '公众号' if s.item.source == 'gzh' else '小红书' }}</span></span></td><td>{{ s.domain }}</td><td><strong>{{ "%.2f"|format(s.viral_score) }}</strong></td><td class="muted">{% if s.item.source == 'gzh' %}阅读 {{ s.item.reads }} / 在看 {{ s.item.watches }} / 分享 {{ s.item.shares }} / 点赞 {{ s.item.likes }} / 收藏 {{ s.item.collects }} / 评论 {{ s.item.comments }}{% else %}粉丝 {{ s.item.fans }} / 点赞 {{ s.item.likes }} / 收藏 {{ s.item.collects }} / 评论 {{ s.item.comments }}{% endif %}</td><td>{{ s.title_pattern or '' }}</td><td>{{ (s.reason or '')[:120] }}</td><td class="muted">{{ s.created_at }}</td></tr>{% endfor %}
 </tbody></table>{% else %}<p class="muted">暂无样本；先触发采样或人工录入。</p>{% endif %}</div>
 
 <script>
@@ -59,14 +65,14 @@ function _jobLine(j) {
   return s;
 }
 async function runCollector(name) {
-  if (name === 'xhs_sample') { await runSampleJob(); return; }
+  if (name === 'xhs_sample' || name === 'gzh_sample') { await runSampleJob(name); return; }
   const {ok, status, data} = await post(`/api/collectors/${name}/run`);
   document.getElementById('collector-msg').textContent = ok ? `采样完成：入库 ${data.inserted} 条，新增爆款 ${data.viral_created ?? 0} 条` : `失败（${status}）：${data.detail || ''}`;
   if (ok) location.reload();
 }
-async function runSampleJob() {
+async function runSampleJob(collector) {
   const msg = document.getElementById('collector-msg');
-  const {ok, status, data} = await post('/api/sampling/jobs', {collector: 'xhs_sample'});
+  const {ok, status, data} = await post('/api/sampling/jobs', {collector});
   if (!ok) { msg.textContent = `入队失败（${status}）：${data.detail || ''}`; return; }
   if (!data.created) { msg.textContent = `已有采样任务在排队/运行（${_jobLine(data.job)}），不重复计费。`; return; }
   await pollJob(data.job.id, msg);
@@ -104,6 +110,16 @@ async function feedSample() {
   const body = { url: document.getElementById('f-url').value.trim(), title: document.getElementById('f-title').value.trim(), author: document.getElementById('f-author').value.trim(), domain: document.getElementById('f-domain').value, fans: +document.getElementById('f-fans').value || 0, likes: +document.getElementById('f-likes').value || 0, collects: +document.getElementById('f-collects').value || 0, comments: +document.getElementById('f-comments').value || 0 };
   const {ok, status, data} = await post('/api/viral-samples/manual', body);
   document.getElementById('feed-msg').textContent = ok ? `已录入 hot_item=${data.hot_item_id}${data.viral ? `，入选爆款（score=${data.viral_score}，topic=${data.topic_id}）` : '，未达入选阈值'}` : `失败（${status}）：${data.detail || JSON.stringify(data)}`;
+  if (ok) location.reload();
+}
+async function feedGzhSample() {
+  const url = document.getElementById('g-url').value.trim();
+  const domain = document.getElementById('g-domain').value;
+  if (!url) { document.getElementById('feed-msg').textContent = '请先粘贴公众号文章链接。'; return; }
+  if (!confirm('按链接调 RedFox 公众号详情接口抓取样本（本条计费 1 次）？')) return;
+  document.getElementById('feed-msg').textContent = '抓取中…';
+  const {ok, status, data} = await post('/api/viral-samples/gzh-manual', {url, domain});
+  document.getElementById('feed-msg').textContent = ok ? `已录入 hot_item=${data.hot_item_id}${data.viral ? `，入选爆款（score=${data.viral_score}，topic=${data.topic_id}）` : '，未达入选阈值（阅读量/互动密度不足，仅落库）'}` : `失败（${status}）：${data.detail || JSON.stringify(data)}`;
   if (ok) location.reload();
 }
 </script>

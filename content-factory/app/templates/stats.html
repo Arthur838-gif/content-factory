@@ -24,16 +24,18 @@
 
 <div class="card">
   <h2>阈值校准（viral_samples 判定 × 实际发布效果）</h2>
-  <p>当前阈值：fans ≤ <strong>{{ calibration.thresholds.viral_fans_max }}</strong> ·
+  <p>小红书阈值：fans ≤ <strong>{{ calibration.thresholds.viral_fans_max }}</strong> ·
      预筛 likes ≥ <strong>{{ calibration.thresholds.viral_likes_min }}</strong> ·
      爆文率 ≥ <strong>{{ calibration.thresholds.viral_score_min }}</strong> ·
      撞题 Jaccard ≥ <strong>{{ calibration.thresholds.topic_duplicate_jaccard }}</strong></p>
-  <p class="notice">修改方式：环境变量（CF_VIRAL_FANS_MAX / CF_VIRAL_LIKES_MIN / CF_VIRAL_SCORE_MIN / CF_TOPIC_DUPLICATE_JACCARD），由周四校准会人工拍板后生效并记录到 docs/p4-calibration.md；本页面不提供改阈值功能。</p>
+  <p>公众号阈值：阅读 ≥ <strong>{{ calibration.thresholds.gzh_reads_min }}</strong> ·
+     互动密度 ≥ <strong>{{ calibration.thresholds.gzh_score_min }}</strong>（无粉丝字段，按阅读量口径判定）</p>
+  <p class="notice">修改方式：环境变量（CF_VIRAL_FANS_MAX / CF_VIRAL_LIKES_MIN / CF_VIRAL_SCORE_MIN / CF_GZH_READS_MIN / CF_GZH_SCORE_MIN / CF_TOPIC_DUPLICATE_JACCARD），由周四校准会人工拍板后生效并记录到 docs/p4-calibration.md；本页面不提供改阈值功能。</p>
   <p class="muted">样本 {{ calibration.summary.sample_count }} 条 · 当前阈值下可复判通过 {{ calibration.summary.would_pass_now }} 条 ·
      有发布对照 {{ calibration.summary.published_sample_count }} 条 ·
      爆文率区间 {{ calibration.summary.viral_score_min }} ~ {{ calibration.summary.viral_score_max }}</p>
-  {% if calibration.samples %}<table><thead><tr><th>样本</th><th>领域</th><th>fans</th><th>likes / collects / comments</th><th>爆文率</th><th>当前阈值复判</th><th>自有账号发布效果</th></tr></thead><tbody>
-  {% for s in calibration.samples %}<tr><td><strong>{{ s.title[:40] }}</strong></td><td>{{ s.domain }}</td><td>{{ s.fans }}</td><td>{{ s.likes }} / {{ s.collects }} / {{ s.comments }}</td><td>{{ s.viral_score }}</td><td>{% if s.would_pass_now %}<span class="badge ready">通过</span>{% else %}<span class="badge failed">不通过</span>{% endif %}</td><td>{% if s.published_effect %}互动合计 {{ s.published_effect.engagement }}（topic #{{ s.published_effect.topic_id }}，score {{ s.published_effect.score }}）{% else %}<span class="muted">未发布</span>{% endif %}</td></tr>{% endfor %}
+  {% if calibration.samples %}<table><thead><tr><th>样本</th><th>领域</th><th>来源</th><th>互动指标</th><th>爆文率</th><th>当前阈值复判</th><th>自有账号发布效果</th></tr></thead><tbody>
+  {% for s in calibration.samples %}<tr><td><strong>{{ s.title[:40] }}</strong></td><td>{{ s.domain }}</td><td>{% if s.source == 'gzh' %}<span class="badge">公众号</span>{% else %}<span class="badge">小红书</span>{% endif %}</td><td class="muted">{% if s.source == 'gzh' %}读 {{ s.reads }} / 在看 {{ s.watches }} / 分享 {{ s.shares }} / 赞 {{ s.likes }} / 藏 {{ s.collects }} / 评 {{ s.comments }}{% else %}粉丝 {{ s.fans }} / 赞 {{ s.likes }} / 藏 {{ s.collects }} / 评 {{ s.comments }}{% endif %}</td><td>{{ s.viral_score }}</td><td>{% if s.would_pass_now %}<span class="badge ready">通过</span>{% else %}<span class="badge failed">不通过</span>{% endif %}</td><td>{% if s.published_effect %}互动合计 {{ s.published_effect.engagement }}（topic #{{ s.published_effect.topic_id }}，score {{ s.published_effect.score }}）{% else %}<span class="muted">未发布</span>{% endif %}</td></tr>{% endfor %}
   </tbody></table>{% else %}<p class="muted">暂无 viral_samples，等 P-1b 采样或人工喂样本。</p>{% endif %}
 </div>
 {% endblock %}

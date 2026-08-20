@@ -93,8 +93,9 @@ def main() -> int:
           and html.find("DeepSeek 发布新一代") < html.find("大模型价格战再起"))
     check("radar 来源徽标 + 双端操作按钮",
           '>radar<' in html and "generate(1,'wechat',this)" in html and "generate(1,'xhs',this)" in html)
-    check("灵感选题区带直触采样按钮（入队 xhs_sample）",
-          "runSampleJob" in html and "/api/sampling/jobs" in html and "采样一轮" in html)
+    check("灵感选题区带双平台直触采样按钮（入队 xhs_sample / gzh_sample）",
+          "runSampleJob(this,'xhs_sample')" in html and "runSampleJob(this,'gzh_sample')" in html
+          and "/api/sampling/jobs" in html)
 
     print("\n[2] 预览页 GET /articles/{id}（xhs ready）")
     resp = client.get(f"/articles/{aid1}")
@@ -125,28 +126,35 @@ def main() -> int:
     check("xhs ready 页带违禁词体检入口（手动、计费提示）",
           "checkSensitive" in html and "sensitive-check" in html and "RedFox 计费" in html)
     resp_w = client.get(f"/articles/{wid}")
-    check("wechat 页无体检入口", "checkSensitive" not in resp_w.text)
+    check("wechat 页带体检入口（P9 起开放，公众号词库）",
+          "checkSensitive" in resp_w.text and "微信公众号" in resp_w.text)
 
     print("\n[2b] 违禁词体检 API（RedFox 打桩，不产生真实计费调用）")
     from app.collectors import redfox as redfox_mod
     from app.collectors.redfox import RedFoxError
 
     real_check = redfox_mod.sensitive_word_search
+    seen_platforms: list[str] = []
     try:
-        redfox_mod.sensitive_word_search = lambda text: {
-            "words": ["免费领", "限时"], "categories": ["诱导行为"]}
+        def _fake_search(text, platform="小红书"):
+            seen_platforms.append(platform)
+            return {"words": ["免费领", "限时"], "categories": ["诱导行为"]}
+
+        redfox_mod.sensitive_word_search = _fake_search
         resp = client.post(f"/api/articles/{aid1}/sensitive-check")
         body = resp.json()
         check("xhs → 200 + 命中词/分类/计费标记",
               resp.status_code == 200 and body["words"] == ["免费领", "限时"]
               and body["categories"] == ["诱导行为"] and body["billed"] is True
               and body["checked_chars"] > 0, str(body))
-        check("wechat → 409（仅小红书词库）",
-              client.post(f"/api/articles/{wid}/sensitive-check").status_code == 409)
+        resp_w2 = client.post(f"/api/articles/{wid}/sensitive-check")
+        check("wechat → 200（P9 起开放，按文章平台传词库）",
+              resp_w2.status_code == 200
+              and seen_platforms == ["小红书", "微信公众号"], str(seen_platforms))
         check("不存在 id → 404",
-              client.post("/api/articles/9999/sensitive-check").status_code == 404)
+              client.post("/api/articles/99999/sensitive-check").status_code == 404)
 
-        def _boom(text):
+        def _boom(text, platform="小红书"):
             raise RedFoxError("HTTP 401：鉴权失败")
         redfox_mod.sensitive_word_search = _boom
         resp = client.post(f"/api/articles/{aid1}/sensitive-check")
@@ -188,7 +196,11 @@ def main() -> int:
     check("content.txt 末尾已拼 #标签", content_txt.rstrip().splitlines()[-1].startswith("#"),
           content_txt.rstrip().splitlines()[-1])
     check("title.txt 与 articles 行一致", zf.read("title.txt").decode("utf-8") == art.title)
-    check("wechat 行 → 409", client.get(f"/api/articles/{wid}/package").status_code == 409)
+    resp_wpkg = client.get(f"/api/articles/{wid}/package")
+    wnames = ZipFile(io.BytesIO(resp_wpkg.content)).namelist() if resp_wpkg.status_code == 200 else []
+    check("wechat 行 → 200 + digest.txt（P9 起开放文稿包）",
+          resp_wpkg.status_code == 200 and "digest.txt" in wnames
+          and any(n.startswith("images/01_cover") for n in wnames), str(wnames))
     check("failed 行 → 409", client.get(f"/api/articles/{fid}/package").status_code == 409)
     check("不存在 id → 404", client.get("/api/articles/9999/package").status_code == 404)
 
@@ -200,9 +212,10 @@ def main() -> int:
     check("种子含 wechat+article、xhs+note 与 xhs+teardown（P-1b 加 A3；P6 另加 rewrite/title_score）",
           {(p["platform"], p["scenario"]) for p in seeds}
           == {("wechat", "article"), ("xhs", "note"), ("xhs", "teardown"),
-              ("xhs", "title_score"), ("xhs", "rewrite"), ("wechat", "rewrite")},
+              ("xhs", "title_score"), ("xhs", "rewrite"), ("wechat", "rewrite"),
+              ("wechat", "title_score")},
           str([(p["platform"], p["scenario"], p["version"]) for p in seeds]))
-    wechat_v1 = next(p for p in seeds if p["platform"] == "wechat")
+    wechat_v1 = next(p for p in seeds if p["platform"] == "wechat" and p["scenario"] == "article")
     resp = client.post("/api/prompts", json={
         "platform": "wechat", "scenario": "article", "name": "热更新验证版",
         "template": wechat_v1["template"], "variables": wechat_v1["variables"]})

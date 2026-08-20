@@ -48,8 +48,8 @@
 {# 备选：灵感选题（radar 爆款仿写 / 手动），按评分倒序；低粉爆款样本同源，
    「采样一轮」直接入队 RedFox 七日爆款采样任务，完成后两处一起刷新 #}
 <div class="field-title"><h2 id="idea-topics" style="margin:0">灵感选题 <span class="muted">（一次性 · 按评分）</span></h2>
-<div class="actions"><button onclick="runSampleJob(this)" title="按栏目关键词池调 RedFox 七日爆款接口（按调用计费），完成后本页自动刷新">采样一轮</button></div></div>
-<p class="muted" id="sample-msg">低粉爆款样本与灵感选题同源：采样一轮 = 调用小红书七日爆款接口，新样本和选题会一起出现在这里。</p>
+<div class="actions"><button onclick="runSampleJob(this,'xhs_sample')" title="按栏目关键词池调 RedFox 七日爆款接口（按调用计费），完成后本页自动刷新">小红书采样</button><button onclick="runSampleJob(this,'gzh_sample')" title="按栏目关键词池调 RedFox 公众号优质库接口（按调用计费，每关键词 1 次），完成后本页自动刷新">公众号采样</button></div></div>
+<p class="muted" id="sample-msg">低粉爆款样本与灵感选题同源：小红书采样 = 七日爆款接口；公众号采样 = 优质库最热文章（阅读量 + 互动密度判定），新样本和选题会一起出现在这里。</p>
 {% if idea_topics %}<div class="card"><table><thead><tr><th>选题</th><th>领域 / 来源</th><th>评分</th><th>状态</th><th>保鲜</th><th>最新生成</th><th>操作</th></tr></thead><tbody>
 {% for topic in idea_topics %}<tr>
 <td><strong>{{ topic.title }}</strong><br><span class="muted">{{ topic.angle }}</span></td>
@@ -59,7 +59,7 @@
 <td>{% if topic.expires_at %}{% if topic.expires_at < now %}<span class="badge failed">已过期</span>{% else %}{{ topic.expires_at.strftime('%m-%d %H:%M') }}{% endif %}{% else %}<span class="muted">不适用</span>{% endif %}</td>
 <td>{% set rows=latest.get(topic.id,{}) %}{% for platform,article in rows.items() %}<a class="badge {{ article.status }}" href="/articles/{{ article.id }}">{{ platform }} · {{ article.status }}</a> {% else %}<span class="muted">暂无</span>{% endfor %}</td>
 <td><div class="actions"><button onclick="generate({{ topic.id }},'wechat',this)">生成公众号</button><button onclick="generate({{ topic.id }},'xhs',this)">生成小红书</button></div></td></tr>{% endfor %}
-</tbody></table></div>{% else %}<div class="card muted">暂无灵感选题，点上方「采样一轮」或去 <a href="/viral">素材采样</a> 触发采集。</div>{% endif %}
+</tbody></table></div>{% else %}<div class="card muted">暂无灵感选题，点上方「小红书采样 / 公众号采样」或去 <a href="/viral">素材采样</a> 触发采集。</div>{% endif %}
 <script>
 async function archiveTopic(id, btn) {
   if (!confirm('归档该选题？将移出本周排期（已生成的文章保留），让位给按主题重排的新选题。')) return;
@@ -69,14 +69,14 @@ async function archiveTopic(id, btn) {
 }
 // ---- 灵感选题区直触采样（与 /viral 的手动采样同一 API：入队 → 轮询 → 刷新）----
 const JOB_STATUS = {queued: '排队中', running: '运行中', succeeded: '成功', succeeded_empty: '成功（空结果）', failed: '失败', blocked: '被熔断拦截', canceled: '已取消'};
-async function runSampleJob(btn) {
+async function runSampleJob(btn, collector) {
   const msg = document.getElementById('sample-msg');
   btn.disabled = true;
   const original = btn.textContent;
   btn.textContent = '入队中…';
   try {
     const r = await fetch('/api/sampling/jobs', {method: 'POST',
-      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({collector: 'xhs_sample'})});
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({collector})});
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { msg.textContent = `入队失败（${r.status}）：${d.detail || ''}`; return; }
     if (!d.created) {

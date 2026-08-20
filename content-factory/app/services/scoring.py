@@ -38,12 +38,19 @@ def normalize_month(month: str | None) -> str | None:
 
 
 def engagement(metrics: dict | None) -> float:
-    """单条回填的加权互动：likes×W_L + collects×W_C + comments×W_M（缺项按 0）。"""
+    """单条回填的加权互动：likes×W_L + collects×W_C + comments×W_M
+    + watches×W_W + shares×W_S（缺项按 0）。
+
+    watches/shares 是公众号回填字段（P9）；xhs 旧记录无这两键不受影响。
+    reads 不进效果分：它是受众规模量纲（同 xhs 的 fans），不是互动强度。
+    """
     m = metrics or {}
     return (
         float(m.get("likes", 0) or 0) * config.SCORE_W_LIKES
         + float(m.get("collects", 0) or 0) * config.SCORE_W_COLLECTS
         + float(m.get("comments", 0) or 0) * config.SCORE_W_COMMENTS
+        + float(m.get("watches", 0) or 0) * config.SCORE_W_WATCHES
+        + float(m.get("shares", 0) or 0) * config.SCORE_W_SHARES
     )
 
 
@@ -333,30 +340,50 @@ def calibration_view(db_path=None) -> dict:
 
     samples = []
     for sample, item in rows:
-        samples.append(
-            {
-                "viral_sample_id": sample.id,
-                "hot_item_id": item.id,
-                "title": item.title,
-                "domain": sample.domain,
-                "fans": item.fans,
-                "likes": item.likes,
-                "collects": item.collects,
-                "comments": item.comments,
-                "viral_score": sample.viral_score,
-                "recomputed_viral_score": radar.viral_score(item),
-                "would_pass_now": radar.is_low_fans_viral(item),
-                "published_effect": effect.get(item.id),
-            }
-        )
+        # 判定与爆文率按源分流：gzh 走阅读量口径，其余走低粉爆款口径
+        if item.source == "gzh":
+            score_fn, viral_fn = radar.gzh_viral_score, radar.is_gzh_viral
+        else:
+            score_fn, viral_fn = radar.viral_score, radar.is_low_fans_viral
+        entry = {
+            "viral_sample_id": sample.id,
+            "hot_item_id": item.id,
+            "source": item.source,
+            "title": item.title,
+            "domain": sample.domain,
+            "fans": item.fans,
+            "likes": item.likes,
+            "collects": item.collects,
+            "comments": item.comments,
+            "viral_score": sample.viral_score,
+            "recomputed_viral_score": score_fn(item),
+            "would_pass_now": viral_fn(item),
+            "published_effect": effect.get(item.id),
+        }
+        if item.source == "gzh":
+            article = radar._gzh_article(item)
+            entry.update(
+                {
+                    "reads": radar._gzh_metric(article, "readCount"),
+                    "watches": radar._gzh_metric(article, "watchCount"),
+                    "shares": radar._gzh_metric(article, "shareCount"),
+                }
+            )
+        samples.append(entry)
     scores = [s["viral_score"] for s in samples]
     return {
         "thresholds": {
             "viral_fans_max": config.VIRAL_FANS_MAX,
             "viral_likes_min": config.VIRAL_LIKES_MIN,
             "viral_score_min": config.VIRAL_SCORE_MIN,
+            "gzh_reads_min": config.GZH_READS_MIN,
+            "gzh_score_min": config.GZH_SCORE_MIN,
             "topic_duplicate_jaccard": config.TOPIC_JACCARD_THRESHOLD,
-            "note": "修改方式：环境变量 CF_VIRAL_FANS_MAX / CF_VIRAL_LIKES_MIN / CF_VIRAL_SCORE_MIN / CF_TOPIC_DUPLICATE_JACCARD（改后重启进程或运行中改 config 属性即生效）；结论记录到 docs/p4-calibration.md",
+            "note": (
+                "修改方式：环境变量 CF_VIRAL_FANS_MAX / CF_VIRAL_LIKES_MIN / CF_VIRAL_SCORE_MIN /"
+                " CF_GZH_READS_MIN / CF_GZH_SCORE_MIN / CF_TOPIC_DUPLICATE_JACCARD"
+                "（改后重启进程或运行中改 config 属性即生效）；结论记录到 docs/p4-calibration.md"
+            ),
         },
         "samples": samples[:200],
         "summary": {

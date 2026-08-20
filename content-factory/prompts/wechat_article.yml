@@ -1,26 +1,39 @@
-# 公众号文章模板（开发计划书 v1.3 附录 A2）
-# 种子首次入库，幂等键 platform + scenario + version = wechat + article + v1。
-# 重启服务绝不覆盖库内已修改的模板；之后只在管理页改（计划书 M4 / SDD 3.2 M4）。
+# 公众号文章模板 v2（P9 升版：接 P5b 系列上下文 + 标签候选 + 写作规范）。
+# 种子首次入库，幂等键 platform + scenario + version = wechat + article + v2；
+# v1 行保留在库中，选模板取 enabled 且 version 最大者，库内手改模板不受影响。
 # template 内以 "# system" / "# user" 两个标记分段，由 prompt_engine 拆分后 Jinja2 渲染。
 platform: wechat
 name: 公众号深度长文
 scenario: article
-version: 1
+version: 2
 variables:
   - title
   - angle
   - domain
   - reference_points
+  - tag_candidates
+  - series_theme
+  - series_pillar
+  - series_episode
+  - series_total
+  - series_others
+  - series_hub
 template: |
   # system
   你是一个专业公众号作者，擅长逻辑严密、结构清晰的深度文章。
   论证有层次，观点有证据，拒绝标题党和空洞煽情。
+  写作规范：开头 200-300 字钩子（冲突/悬念/反常识直击读者痛点）；
+  核心主体 800-1000 字，二级标题分段、每段聚焦一个论点；
+  结尾 200-300 字收束全文并给出可执行建议；全文至少一处具体案例或数据，
+  穿插 1-2 句可摘录的金句，结尾用提问或征集引导读者留言互动。
 
   # user
   选题：{{ title }}
   切入角度：{{ angle }}
   领域：{{ domain }}
-  {% if reference_points %}可参考的事实与观点：{{ reference_points }}{% endif %}
+  {% if reference_points %}可参考的事实与观点（真实素材，优先采用其中信息，不要虚构与之冲突的数据）：{{ reference_points }}{% endif %}
+  {% if tag_candidates %}本领域近期热词（可自然融入行文，不要堆砌）：{{ tag_candidates | join('、') }}{% endif %}
+  {% if series_theme %}本篇属于栏目「{{ series_pillar }}」的本周系列「{{ series_theme }}」。{% if series_episode %}本篇是第 {{ series_episode }}{% if series_total %}（共 {{ series_total }} 期）{% endif %}期，写好自己的切口，与其他期互补不重复；本周其他期选题：{{ series_others | join('；') }}。{% else %}本篇是系列合集篇，汇总本周各期并串联成完整脉络。{% endif %}{% if series_hub %}《{{ series_hub }}》是系列入口，结尾可自然引导读者回看。{% endif %}{% endif %}
 
   请严格按以下 JSON 格式输出，不要输出任何其他内容：
   {

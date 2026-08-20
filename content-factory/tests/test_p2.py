@@ -5,10 +5,10 @@
   1. 端到端 mock 生成 platform=xhs：自动出图 1 封面 + ≥2 金句图，assets 表登记一致
   2. 中文无乱码无截断：emoji 剥离、超长自动缩字号而非截断、渲染像素非空
   3. 重复生成不残留：开新行后新目录文件数与 assets 行数一致，旧目录保留
-  4. wechat_cover 版式独立渲染 900×383（调用方 M6 留后续）
+  4. wechat_cover 版式独立渲染 900×383（P9 已接入生成链路）
   5. checklist_card 版式独立渲染（不接生成链路）
   6. 字体缺失：generate xhs 落 failed，error 提示字体放置方法
-  7. P0 回归：wechat 生成不受影响（且不为 wechat 出图）；400 不支持平台
+  7. P0 回归：wechat 生成不受影响且出 PIL 封面（P9）；400 不支持平台
   8. imaging / render_assets 单元：编号、清旧幂等、sanitize
 
 运行：.venv/Scripts/python tests/test_p2.py
@@ -186,13 +186,17 @@ def main() -> int:
     config.FONTS_DIR = real_fonts
     imaging._FONT_CACHE.clear()
 
-    print("\n[7] P0 回归（wechat 不出图）+ 400 不支持平台")
+    print("\n[7] P0 回归（wechat 出 PIL 封面）+ 400 不支持平台")
     rw = _gen(client, 2, "wechat")
     check("wechat 生成仍 ready", rw.status_code == 200 and rw.json().get("status") == "ready",
           str(rw.json()))
     wid = rw.json()["article_id"]
-    check("wechat 不出图不登记 assets", _assets_of(wid) == []
-          and not (config.ASSETS_DIR / str(wid)).exists())
+    wrows = _assets_of(wid)
+    check("wechat 登记 1 张 PIL 封面（900×383，无金句图）",
+          len(wrows) == 1 and wrows[0].kind == "cover"
+          and (wrows[0].width, wrows[0].height) == (900, 383)
+          and (config.ASSETS_DIR / str(wid) / "01_cover.png").exists(),
+          str([(r.kind, r.width, r.height) for r in wrows]))
     rbili = _gen(client, 1, "bilibili")
     check("400 不支持平台", rbili.status_code == 400, str(rbili.status_code))
 

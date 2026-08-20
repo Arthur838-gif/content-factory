@@ -5,6 +5,7 @@
 
 P-1b：熔断状态持久化到 collector_state（连续失败 3 次熔断、只告警一次、
 仅人工恢复）；xhs 条目走低粉爆款判定管线（viral_samples + 自动建题）。
+P9：gzh 条目走公众号判定管线（阅读量下限 + 互动密度，process_gzh_item）。
 """
 import logging
 from abc import ABC, abstractmethod
@@ -192,6 +193,16 @@ def persist_hot_items(session, items: list[HotItem], collector: str = "") -> Col
         session.flush()  # 拿 id 供 evidence 快照引用
         if item.source == "xhs":
             outcome = radar.process_xhs_item(session, row, domain, keyword, auto=True)
+            if outcome["viral"]:
+                viral_created += 1
+                if outcome["topic_outcome"] == "created":
+                    created += 1
+                else:
+                    merged += 1
+        elif item.source == "gzh":
+            # P9：公众号爆款判定（阅读量下限 + 互动密度）。fans 恒 0，绝不能
+            # 走 process_xhs_item——爆文率会除以 1，全数误判爆款
+            outcome = radar.process_gzh_item(session, row, domain, keyword, auto=True)
             if outcome["viral"]:
                 viral_created += 1
                 if outcome["topic_outcome"] == "created":

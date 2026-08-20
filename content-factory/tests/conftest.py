@@ -6,8 +6,8 @@
   临时库，被 pytest 收集会互相污染——collect_ignore 排除，只经
   tests/run_all.py 或直接运行。
 - 正式 pytest 用例（test_migrations / test_domains / test_sampling_jobs /
-  test_lifespan）：用 isolated_env fixture 做每用例隔离（临时库 + monkeypatch
-  还原 config + 引擎释放），可随意组合运行。
+  test_lifespan / test_model_config / test_gzh）：用 isolated_env fixture
+  做每用例隔离（临时库 + monkeypatch 还原 config + 引擎释放），可随意组合运行。
 """
 
 collect_ignore = [
@@ -25,6 +25,7 @@ collect_ignore = [
     "test_redfox.py",
     "alert_receiver.py",
     "_run_real_acceptance.py",
+    "_run_real_gzh_acceptance.py",
     "verify_p1a_live.sh",
 ]
 

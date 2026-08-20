@@ -66,9 +66,14 @@ def _default_dedupe_key(kind: str, collector: str, pillar_id: int | None) -> str
     return f"{kind}:{collector}"
 
 
-def resolve_default_keywords() -> list[str]:
-    """无显式关键词时的推导（与 XhsSampleCollector._queries 同口径）：
-    环境变量 > 启用栏目关键词池 > 领域词表。"""
+def resolve_default_keywords(collector: str = "xhs_sample") -> list[str]:
+    """无显式关键词时的推导（与各采样器 _queries 同口径）：
+    环境变量 > 启用栏目关键词池 > 领域词表。按采集器分流。"""
+    if collector == "gzh_sample":
+        from ..collectors.gzh_sample import GzhSampleCollector
+
+        return GzhSampleCollector()._queries()
+
     from ..collectors.xhs_sample import XhsSampleCollector
 
     return XhsSampleCollector()._queries()
@@ -89,9 +94,16 @@ def enqueue(
     重试不漂移。无可采关键词抛 ValueError（调用方 422）。
     """
     if keywords is None:
-        keywords = resolve_default_keywords()
+        keywords = resolve_default_keywords(collector)
     clean = [kw for kw in (keywords or []) if kw and str(kw).strip()]
-    clean = [str(kw).strip() for kw in clean][: config.XHS_SAMPLE_MAX_QUERIES]
+    clean = [str(kw).strip() for kw in clean]
+    # 关键词上限按采集器各自的 config（P9 起双采样器，默认同为 20）
+    cap = (
+        config.GZH_SAMPLE_MAX_QUERIES
+        if collector == "gzh_sample"
+        else config.XHS_SAMPLE_MAX_QUERIES
+    )
+    clean = clean[:cap]
     if not clean:
         raise ValueError("无可采样的关键词（栏目词池与领域词表均为空，或显式列表为空）")
     key = dedupe_key or _default_dedupe_key(kind, collector, pillar_id)

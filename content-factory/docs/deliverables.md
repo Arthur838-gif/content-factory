@@ -20,6 +20,7 @@
 | P7 | 合集荐真实工具：GitHub 开源项目采集器（时效优先） | d640428 |
 | P5c | 模型配置页：文案/图片大模型运行时切换 | c206363 |
 | P8a | 小红书链路增强：素材摘录 + 平台硬上限 + 违禁词体检回填 | 08fca48 |
+| P9 | 公众号数据链路：优质库采样 + 阅读量判定 + 生成/封面/体检/回填闭环 | （本次提交） |
 
 ---
 
@@ -123,11 +124,41 @@
 - **进度快照**（fb27c99）：挂起项清单与恢复路径（生图总闸、周度拆解、发布回填、
   手动建题入口、热榜数据源等，下周做）。
 
+## 08-20（下午）：P9 公众号数据链路与生成发布体验补齐
+
+- **接口选型**：12 份 RedFox 公众号 API 文档全读，只接优质库 2 个只读接口——
+  `searchArticle`（sortType=_4 最热，采样核心）、`queryArticleDetail`（按 URL
+  抓详情，手动喂样本）；账号维度 3 个（searchUser/queryWorkList/queryUser）、
+  广域库 5 个、AI 创作搜索 2 个全部记入推迟项。
+- **采样与判定**：`GzhSampleCollector`（gzh_sample）进统一采样队列（手动触发，
+  定时仍仅 xhs——计费纪律）；阅读量口径判定
+  `gzh_score = (likes + watches + 2×collects + 3×shares + 3×comments) ÷ max(reads,1)`，
+  `reads ≥ 10000 且 score ≥ 0.08` 入选（无粉丝字段，不复制「低粉」；gzh 条目
+  绝不走 xhs 判定——fans=0 会除以 1 全数误判，入库分流有守卫用例）。
+- **手动喂样本（URL 抓取式）**：贴文章链接 + 领域 → 详情接口抓全量指标（1 次
+  计费，confirm；URL 重复 409 先查重不白花）→ 同一建题管线。
+- **生成质量**：WechatArticle 硬上限校验（30/54/3000 字）；wechat_article.yml
+  v2（系列上下文 + 标签候选 + 公众号写作规范）；标题打分平台化（wechat 四维
+  0-100 制 vs xhs 六维 0-10 制，同响应形状前端零改动适配）。
+- **发布链路**：PIL 封面 900×383（零计费，摘要优先）+ 文稿素材包
+  （title/digest/content/images）；违禁词体检平台参数化（wechat → 微信公众号
+  词库）；回填表单分平台（公众号 阅读/在看/点赞/分享/收藏/评论）；效果分扩展
+  `+ watches×1 + shares×3`（reads 是受众规模量纲不进效果分）。
+- **真实接口验收**：`tests/_run_real_gzh_acceptance.py`（3 次计费，不进 CI）。
+  08-20 执行：searchArticle ✓（sortType=_4、20 条全量指标）；违禁词
+  platform=微信公众号 ✓（wechat 体检保持开放）；queryArticleDetail 接口通但对
+  搜索长链 6/6 返回 3203「优质库暂未收录」（不扣费）——数据覆盖面问题，
+  广域库 fallback 与 workUuid 查详情两条补救路径记入推迟项。首两轮遇 RedFox
+  story API 全线 502（服务端故障，与参数无关），第三轮恢复后完成。
+- **回归**：pytest 86 项（新增 test_gzh.py 32 项）+ `tests/run_all.py` 13 套
+  全绿；test_p0/p1/p2/p3 中旧口径断言同步更新（v2 模板键、wechat 出图、
+  双平台采样按钮、体检平台参数）。
+
 ---
 
 ## 质量基线（截至 08-20）
 
-- **测试**：`tests/run_all.py` 13 套验收脚本 + pytest 54 项正式用例，全绿；
+- **测试**：`tests/run_all.py` 13 套验收脚本 + pytest 86 项正式用例，全绿；
   离线可重复（LLM mock / 采样桩 / 临时库），真实付费调用一律不进测试。
 - **纪律**（全程未破）：模板零 innerHTML（守卫用例）；api_key 只回掩码；
   RedFox 只读查询、按调用计费全走手动/任务队列；绑定 127.0.0.1，

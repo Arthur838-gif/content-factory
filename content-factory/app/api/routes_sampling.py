@@ -16,9 +16,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sampling", tags=["sampling"])
 
+# 可上队列的关键词型采样器（P9 起双采样器）；其它采集器走同步接口
+SAMPLING_COLLECTORS = ("xhs_sample", "gzh_sample")
+
 
 class JobIn(BaseModel):
-    collector: str = Field("xhs_sample", description="采样器名（当前支持 xhs_sample）")
+    collector: str = Field("xhs_sample", description="采样器名（支持 xhs_sample / gzh_sample）")
     keywords: list[str] | None = Field(None, description="显式关键词；缺省按词池/词表推导")
 
 
@@ -29,8 +32,10 @@ def create_job(body: JobIn) -> dict:
     同一采集器已有活跃手动任务时不重复入队（防连点重复计费），
     返回在跑任务并标记 deduplicated。
     """
-    if body.collector != "xhs_sample":
-        raise HTTPException(422, f"采样任务暂只支持 xhs_sample（收到 {body.collector}）")
+    if body.collector not in SAMPLING_COLLECTORS:
+        raise HTTPException(
+            422, f"采样任务暂只支持 {' / '.join(SAMPLING_COLLECTORS)}（收到 {body.collector}）"
+        )
     if circuit_open(body.collector):
         raise HTTPException(
             409,

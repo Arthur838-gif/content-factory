@@ -4,6 +4,7 @@ P0：POST /api/topics/{id}/generate?platform=wechat（公众号 Markdown）。
 P1：platform=xhs（小红书笔记，M7 适配后正文末尾拼 #标签）。
 P2：xhs 成功后自动出图（M7 调共享图文服务，1 封面 + N 金句图，登记 assets；
 出图失败 article 整体 failed——SDD 5.7 articles 与 assets 同一事务）。
+P9：wechat 成功后自动出 PIL 封面（900×383，零计费），同一落库语义。
 五段式链路：选题 → 选模板（M4 现读库）→ LLM/Mock（M5）→ JSON 校验 → 适配落库。
 公众号 HTML 渲染与草稿箱推送属 M6、素材包 ZIP 与预览页属 P3，均不做。
 """
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select, update
 
 from .. import config
+from ..adapters import wechat as wechat_adapter
 from ..adapters import xhs as xhs_adapter
 from ..db import session_scope
 from ..models import Article, TagLibrary, Topic
@@ -322,6 +324,18 @@ def _persist_generation(
                 status = "failed"
                 article.status = "failed"
                 article.error = error = f"图文合成失败：{exc}"
+        if status == "ready" and platform == "wechat":
+            # P9：公众号封面（PIL 本地排版 900×383，零计费，不涉 AI 生图总闸）。
+            # digest 是封面主文案的天然来源（≤54 字），缺省回退标题；
+            # 出图失败与 xhs 同语义：article 整体 failed。
+            try:
+                wechat_adapter.render_cover_asset(
+                    session, article_id, cover_text=meta.get("digest") or title
+                )
+            except imaging.ImagingError as exc:
+                status = "failed"
+                article.status = "failed"
+                article.error = error = f"公众号封面合成失败：{exc}"
         # topic 首次触发生成 → used
         session.execute(
             update(Topic).where(Topic.id == topic_id, Topic.status == "new").values(status="used")
@@ -400,18 +414,21 @@ def rewrite_article(
 class TitleScoreIn(BaseModel):
     title: str
     keyword: str = ""
+    platform: str = "xhs"
 
 
 @router.post("/titles/score")
 def score_title(body: TitleScoreIn) -> dict:
-    """小红书标题六维加权打分（融合红狐 xiaohongshu-title-score 方法论）。
+    """标题打分（融合红狐方法论：小红书六维加权 / 公众号四维加权）。
 
-    无状态评审：主题匹配度15% + 结构合规度20% + 利益清晰度25% +
-    情绪唤醒度20% + 稀缺性感知15% + 合规安全性5%，S/A/B/C 分级，
+    无状态评审：xhs 主题匹配度15% + 结构合规度20% + 利益清晰度25% +
+    情绪唤醒度20% + 稀缺性感知15% + 合规安全性5%（0-10 制）；
+    wechat 赛道匹配度15% + 点击诱因强度35% + 结构合规性15% +
+    爆文潜质匹配度35%（0-100 制）。S/A/B/C 分级，
     附问题清单与改写版标题。
     """
     try:
-        return titles.score(body.title, body.keyword)
+        return titles.score(body.title, body.keyword, platform=body.platform)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     except Exception as exc:

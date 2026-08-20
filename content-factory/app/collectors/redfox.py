@@ -11,6 +11,10 @@
 - 违禁词检测 POST /story/api/cozeSkill/sensitiveWordSearch —— 文章发布前
   手动体检（按调用计费），契约取自 redfox-skills/xiaohongshu-prohibited-word
   的实测脚本（X-API-KEY 头 + content/platform/source 载荷）。
+- 公众号优质库（P9，文档 2026-08-20 拉取）：
+  POST /story/api/gzhData/searchArticle 关键词搜文章（腰部以上近 30 天，
+  列表自带正文与全量互动计数，无粉丝字段）；
+  POST /story/api/gzhData/queryArticleDetail 按文章地址取详情（人工喂样本）。
 
 鉴权：请求头 REDFOX_API_KEY（redfox.hk 密钥管理页创建），按调用计费；
 违禁词接口按 skill 实测另带 X-API-KEY 头（cozeSkill 系与洞察系鉴权头并存）。
@@ -34,6 +38,8 @@ WORK_DETAIL_PATH = "/story/api/xhsUser/queryWorkDetail"
 SEVEN_PATH = "/story/api/cozeSkill/getXhsCozeSkillDataSeven"
 SEARCH_USER_PATH = "/story/api/xhsUser/searchUser"
 SENSITIVE_PATH = "/story/api/cozeSkill/sensitiveWordSearch"
+GZH_SEARCH_ARTICLE_PATH = "/story/api/gzhData/searchArticle"
+GZH_ARTICLE_DETAIL_PATH = "/story/api/gzhData/queryArticleDetail"
 
 # 七日爆款接口的官方类目枚举（文档 2026-08-19 拉取；建栏目的领域下拉与
 # 关键词推荐来源）。「综合全部」是查询用通配值，不作为内容领域，排除。
@@ -231,6 +237,71 @@ def work_detail(work_id: str = "", work_link: str = "") -> dict:
     return data
 
 
+# ---- 公众号优质库（P9；只读查询，按调用计费）----
+def gzh_search_articles(keyword: str, offset: int = 0, sort_type: str = "_4") -> list[dict]:
+    """公众号文章搜索（优质库，腰部以上公众号近 30 天，列表自带正文）。
+
+    sortType：_0 相关性 / _2 最新 / _4 最热（按阅读数倒序）——默认最热，
+    与爆款采样「找互动异常高的内容」的目标一致。每页 20 条 1 次计费；
+    翻页用 offset（每页 +20），深采留给后续需要。
+    """
+    payload = {"keyword": keyword, "offset": offset, "sortType": sort_type}
+    data = _unwrap(_post(GZH_SEARCH_ARTICLE_PATH, payload), "公众号搜索")
+    rows = data.get("list") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        raise RedFoxError(f"公众号搜索响应缺少 list 列表：{str(data)[:200]}")
+    return [article for article in rows if isinstance(article, dict)]
+
+
+def parse_gzh_articles(articles: list[dict]) -> list[HotItem]:
+    """公众号 searchArticle 条目 → HotItem。
+
+    fans 恒 0：公众号接口无粉丝字段，账号规模维度推迟（docs 记录）；
+    阅读数/在看/分享等完整指标留在 raw.article，由 gzh 判定管线读取。
+    无标题或无 workUrl 的条目跳过（URL 是去重键，缺了无法去重）。
+    """
+    items: list[HotItem] = []
+    for article in articles:
+        title = str(article.get("title") or "").strip()
+        url = str(article.get("workUrl") or "").strip()
+        if not title or not url:
+            continue
+        items.append(
+            HotItem(
+                source="gzh",
+                title=title,
+                url=url,
+                author=str(article.get("author") or "") or None,
+                fans=0,
+                likes=_to_int(article.get("likeCount")),
+                collects=_to_int(article.get("collectCount")),
+                comments=_to_int(article.get("commentCount")),
+                raw={"article": article},
+            )
+        )
+    return items
+
+
+def search_gzh_items(keyword: str, offset: int = 0, sort_type: str = "_4") -> list[HotItem]:
+    """主入口：公众号搜索 + 归一化，供 gzh_sample 优先调用。"""
+    return parse_gzh_articles(gzh_search_articles(keyword, offset=offset, sort_type=sort_type))
+
+
+def gzh_article_detail(url: str) -> dict:
+    """公众号作品详情（优质库）：按文章地址取全量指标与正文。
+
+    人工喂样本用（1 次计费，页面 confirm 后才触发）；返回原始 data 对象
+    （与列表条目同形，含 content 全文），字段解析由调用方做。
+    """
+    url = (url or "").strip()
+    if not url:
+        raise RedFoxError("gzh_article_detail 需要文章地址")
+    data = _unwrap(_post(GZH_ARTICLE_DETAIL_PATH, {"url": url}), "公众号作品详情")
+    if not isinstance(data, dict):
+        raise RedFoxError("公众号作品详情响应缺少 data 对象")
+    return data
+
+
 # 违禁词在标注 HTML 里的三种风险级 span 类名（skill 实测脚本同款正则）
 _SENSITIVE_SPAN = re.compile(
     r'<span class="(?:banned-word|sensitive-word|industry-banned-word)">(.*?)</span>'
@@ -238,10 +309,12 @@ _SENSITIVE_SPAN = re.compile(
 SENSITIVE_MAX_CHARS = 3000
 
 
-def sensitive_word_search(content: str) -> dict:
-    """小红书违禁词检测（按调用计费，只读；发布前手动体检用）。
+def sensitive_word_search(content: str, platform: str = "小红书") -> dict:
+    """违禁词检测（按调用计费，只读；发布前手动体检用）。
 
-    载荷/解析契约取自 redfox-skills/xiaohongshu-prohibited-word 的实测脚本：
+    platform 实测过「小红书」；「微信公众号」为 P9 待验证值（真实验收
+    确认，若上游不支持则公众号体检回滚为不可用）。载荷/解析契约取自
+    redfox-skills/xiaohongshu-prohibited-word 的实测脚本：
     返回 data.content 为 HTML 标注原文（命中词包在风险级 span 里），
     prohibitedWordsType 为风险分类列表。返回 {words, categories}；
     words 保序去重。调用方负责确认计费（页面 confirm 后才触发）。
@@ -258,8 +331,9 @@ def sensitive_word_search(content: str) -> dict:
     resp = _unwrap(
         _post(
             SENSITIVE_PATH,
-            # source 沿用 skill 实测原值，不改未知契约
-            {"content": content, "platform": "小红书", "source": "小红书违禁词查询-GitHub"},
+            # source 沿用 skill 实测原值构造（小红书时与实测脚本逐字一致），
+            # 不改未知契约
+            {"content": content, "platform": platform, "source": f"{platform}违禁词查询-GitHub"},
             extra_headers={"X-API-KEY": config.REDFOX_API_KEY},
         ),
         "违禁词检测",

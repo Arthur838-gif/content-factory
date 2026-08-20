@@ -113,7 +113,7 @@ class HotItem(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    source: Mapped[str] = mapped_column(String(16), comment="weibo / zhihu / baidu / xhs")
+    source: Mapped[str] = mapped_column(String(16), comment="weibo / zhihu / baidu / xhs / gzh / github")
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str] = mapped_column(String(512), unique=True, comment="唯一约束（去重键）")
     author: Mapped[str | None] = mapped_column(String(128), nullable=True)

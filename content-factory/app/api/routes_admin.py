@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from ..collectors import base as collectors_base
 from ..collectors import hotboard  # noqa: F401  注册 hotboard 采集器
 from ..collectors import xhs_sample  # noqa: F401  注册 xhs_sample 采样器（P-1b）
+from ..collectors import gzh_sample  # noqa: F401  注册 gzh_sample 采样器（P9）
 from ..collectors import github_tools  # noqa: F401  注册 github_tools 采集器（P7）
 from ..collectors.base import circuit_open
 from ..services import radar, sampling_jobs
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["admin"])
 
+# 付费采样器：手动触发一律入队异步执行（202 + job），API 进程不联网
+QUEUED_SAMPLERS = ("xhs_sample", "gzh_sample")
+
 # 手动触发的运维任务统一登记进 collectors.base._MANUAL_TASKS（伪采集器：
 # 非 fetch() 协议、不参与熔断，仅调试/演练用）；此处只做登记，不建平行注册表
 collectors_base.register_manual_task("xhs_teardown", radar.run_weekly_teardown)
@@ -26,14 +30,14 @@ collectors_base.register_manual_task("xhs_teardown", radar.run_weekly_teardown)
 
 @router.post("/collectors/{name}/run")
 def trigger_collector(name: str):
-    """手动触发一次采集（调试用）。name: hotboard / xhs_sample / xhs_teardown。
+    """手动触发一次采集（调试用）。name: hotboard / xhs_sample / gzh_sample / xhs_teardown。
 
-    xhs_sample 是付费采样，P-2 起只入队：返回 202 + 任务详情，
+    xhs_sample / gzh_sample 是付费采样，只入队：返回 202 + 任务详情，
     由 worker 领取执行，进度走 /api/sampling/jobs/{id}。
     其余 name：409 = 采集器已熔断（需人工恢复）；502 = RedFox 等上游失败（失败计数 +1）。
     502 detail 只回类型化摘要，不回 repr(exc)——异常文本可能带内部路径/地址。
     """
-    if name == "xhs_sample":
+    if name in QUEUED_SAMPLERS:
         if circuit_open(name):
             raise HTTPException(
                 status_code=409,

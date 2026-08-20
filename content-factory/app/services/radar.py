@@ -4,6 +4,9 @@ P-1b 增量：
 - 低粉爆款打分（纯规则，实时链路不调 LLM）与 viral_samples 落库
 - 自动 / 人工样本共用的 xhs 判定管线 process_xhs_item
 - 周度 LLM 拆解编排（复用 prompt_engine + generator，结论回写样本与标签库）
+
+P9 增量：公众号爆款判定管线 process_gzh_item（优质库接口无粉丝字段，
+用阅读量下限 + 互动密度替代「低粉」口径），evidence 快照带公众号指标。
 """
 import logging
 import re
@@ -170,19 +173,136 @@ def process_xhs_item(
     return result
 
 
+# ---- 公众号爆款判定（P9；优质库接口无粉丝字段，改用阅读量下限 + 互动密度）----
+def _gzh_article(item: HotItem) -> dict:
+    """公众号条目的 raw.article（RedFox 原始字段：readCount/watchCount/shareCount…）。"""
+    raw = item.raw or {}
+    article = raw.get("article") if isinstance(raw.get("article"), dict) else {}
+    return article
+
+
+def _gzh_metric(article: dict, key: str) -> int:
+    """raw.article 指标容错取整（文档为 Integer，兜底 "1,200" / "1.5万" 等字符串）。"""
+    value = article.get(key)
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    from ..collectors.redfox import _to_int
+
+    return _to_int(value)
+
+
+def gzh_reads(item: HotItem) -> int:
+    """公众号阅读数（判定分母；人工喂样本经详情接口取，字段同形）。"""
+    return _gzh_metric(_gzh_article(item), "readCount")
+
+
+def gzh_viral_score(item: HotItem) -> float:
+    """公众号爆文率 = (likes + watches + 2×collects + 3×shares + 3×comments) ÷ max(reads, 1)。
+
+    likes/collects/comments 入库时已映射到 ORM 列；reads/watches/shares 在
+    raw.article。reads 为 0 或空时按 1 计（不除零）。纯规则计算，不调 LLM。
+    """
+    article = _gzh_article(item)
+    engagement = (
+        item.likes
+        + _gzh_metric(article, "watchCount")
+        + 2 * item.collects
+        + 3 * _gzh_metric(article, "shareCount")
+        + 3 * item.comments
+    )
+    reads = max(gzh_reads(item), 1)
+    return round(engagement / reads, 4)
+
+
+def is_gzh_viral(item: HotItem) -> bool:
+    """公众号爆款判定：reads ≥ GZH_READS_MIN 且 gzh_viral_score ≥ GZH_SCORE_MIN。
+
+    阅读量是互动密度的分母——下限属于指标有效性（几十阅读的高比例没有
+    意义），不同于小红书 VIRAL_LIKES_MIN 的质量预筛，故直接进判定本体。
+    """
+    if gzh_reads(item) < config.GZH_READS_MIN:
+        return False
+    return gzh_viral_score(item) >= config.GZH_SCORE_MIN
+
+
+def process_gzh_item(
+    session, item: HotItem, domain: str, keyword: str, auto: bool = True
+) -> dict:
+    """gzh 条目统一判定管线：入选 → viral_samples + 自动建题（含撞题去重）。
+
+    auto=True（自动采样）：readCount 缺失（0）不判定、不伪造（降级只落文章级数据）。
+    auto=False（人工喂样本，URL 抓详情）：指标来自详情接口，直接判定。
+    """
+    result = {
+        "viral": False,
+        "viral_score": None,
+        "viral_sample_id": None,
+        "topic_outcome": None,
+        "topic_id": None,
+    }
+    if auto and gzh_reads(item) <= 0:
+        return result  # 阅读数缺失 = 指标不可用：降级模式，只落 hot_items
+    if not is_gzh_viral(item):
+        return result
+
+    score = gzh_viral_score(item)
+    sample = ViralSample(
+        hot_item_id=item.id,
+        domain=domain,
+        viral_score=score,
+        title_pattern="auto",
+        reason="rule",
+    )
+    session.add(sample)
+    session.flush()
+    outcome, topic = create_or_merge_topic(session, item, domain, keyword, score=score, viral_score=score)
+    result.update(
+        viral=True,
+        viral_score=score,
+        viral_sample_id=sample.id,
+        topic_outcome=outcome,
+        topic_id=topic.id,
+    )
+    return result
+
+
 def _item_desc(item: HotItem) -> str:
-    """素材正文摘录：RedFox 洞察的 raw.article.desc / GitHub 的 raw.description。
+    """素材正文摘录：RedFox 洞察的 raw.article.desc / 公众号的 raw.article.summary /
+    GitHub 的 raw.description；公众号摘要缺失时取正文开头。
 
     截 200 字进 evidence——reference_points 用它给生成提供真实内容依据，
     而不只是标题（模型只看标题只能自由发挥）。
     """
     raw = item.raw or {}
     article = raw.get("article") if isinstance(raw.get("article"), dict) else {}
-    desc = str(article.get("desc") or raw.get("description") or "").strip()
+    desc = str(
+        article.get("desc") or article.get("summary") or raw.get("description") or ""
+    ).strip()
+    if not desc:
+        # 公众号搜索列表自带全文：摘要缺失时取正文开头当摘录
+        desc = str(article.get("content") or "").strip()[:200]
     return desc[:200]
 
 
 def _evidence_snapshot(item: HotItem, domain: str, keyword: str, viral: float | None = None) -> dict:
+    metrics = {
+        "fans": item.fans,
+        "likes": item.likes,
+        "collects": item.collects,
+        "comments": item.comments,
+    }
+    if item.source == "gzh":
+        # 公众号判定与生成都依赖阅读量口径：reads/watches/shares 一并进快照
+        article = _gzh_article(item)
+        metrics.update(
+            {
+                "reads": _gzh_metric(article, "readCount"),
+                "watches": _gzh_metric(article, "watchCount"),
+                "shares": _gzh_metric(article, "shareCount"),
+            }
+        )
     snapshot = {
         "hot_item_id": item.id,
         "source": item.source,
@@ -193,12 +313,7 @@ def _evidence_snapshot(item: HotItem, domain: str, keyword: str, viral: float | 
         "captured_at": (item.captured_at or datetime.now()).isoformat(timespec="seconds"),
         "domain": domain,
         "matched_keyword": keyword,
-        "metrics": {
-            "fans": item.fans,
-            "likes": item.likes,
-            "collects": item.collects,
-            "comments": item.comments,
-        },
+        "metrics": metrics,
     }
     if viral is not None:
         snapshot["viral_score"] = viral

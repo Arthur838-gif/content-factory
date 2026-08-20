@@ -91,7 +91,7 @@ def main() -> int:
     print("\n[1] 种子模板入库（幂等键 xhs+note+v1）")
     seeded = prompt_engine.seed_prompts()
     check("xhs 模板首次入库", "xhs+note+v1" in seeded, str(seeded))
-    check("wechat 模板同时入库（P0 回归）", "wechat+article+v1" in seeded, str(seeded))
+    check("wechat 模板同时入库（P0 回归）", "wechat+article+v2" in seeded, str(seeded))
     reseeded = prompt_engine.seed_prompts()
     check("重复入库跳过（重启不覆盖）", reseeded == [], str(reseeded))
     with session_scope() as s:

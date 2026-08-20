@@ -2,6 +2,7 @@
 
 P8a 增量：小红书文章发布前的 RedFox 违禁词体检（手动、按调用计费），
 命中词可一键回填本地词表（下次生成直接拦截，滚动扩充）。
+P9 增量：体检与素材包对公众号开放；回填指标加 reads/watches/shares。
 """
 import logging
 from datetime import datetime
@@ -84,7 +85,7 @@ def get_article(article_id: int) -> dict:
 
 @router.get("/articles/{article_id}/package")
 def download_package(article_id: int) -> StreamingResponse:
-    """按 SDD 4.2 在内存中创建小红书 ready 素材包。"""
+    """按 SDD 4.2 在内存中创建 ready 素材包（xhs 图文包 / wechat 文稿包）。"""
     with session_scope() as session:
         article = session.get(Article, article_id)
         if article is None:
@@ -94,8 +95,8 @@ def download_package(article_id: int) -> StreamingResponse:
                 select(Asset).where(Asset.article_id == article_id).order_by(Asset.id)
             )
         )
-        if article.platform != "xhs":
-            raise HTTPException(status_code=409, detail="仅小红书文章可下载素材包")
+        if article.platform not in ("xhs", "wechat"):
+            raise HTTPException(status_code=409, detail="仅小红书 / 公众号文章可下载素材包")
         if article.status != "ready":
             raise HTTPException(status_code=409, detail="仅 ready 文章可下载素材包")
         if not assets:
@@ -104,6 +105,11 @@ def download_package(article_id: int) -> StreamingResponse:
         package = BytesIO()
         with ZipFile(package, "w", ZIP_DEFLATED) as archive:
             archive.writestr("title.txt", article.title)
+            if article.platform == "wechat":
+                # 公众号发布后台摘要位直接粘贴；xhs 无摘要字段
+                digest = str((article.meta or {}).get("digest") or "")
+                if digest:
+                    archive.writestr("digest.txt", digest)
             archive.writestr("content.txt", article.content)
             for index, asset in enumerate(assets, start=1):
                 # path 形如 "assets/{article_id}/{file}"（相对 data/）；解析时尊重
@@ -128,8 +134,10 @@ def download_package(article_id: int) -> StreamingResponse:
 
 @router.post("/articles/{article_id}/sensitive-check")
 def sensitive_check(article_id: int) -> dict:
-    """发布前违禁词体检：标题 + 正文全文交 RedFox 小红书违禁词库检测。
+    """发布前违禁词体检：标题 + 正文全文交 RedFox 违禁词库检测。
 
+    平台随文章：xhs → 小红书词库（实测可用）；wechat → 微信公众号词库
+    （P9 上线；上游若不支持会 502 报错，不影响文章本身）。
     按调用计费——只由文章页手动触发（页面 confirm 后才发请求），不进任何
     自动链路。结果不落库：体检是发布前的人工质检动作，词表回填才是持久化。
     """
@@ -140,13 +148,14 @@ def sensitive_check(article_id: int) -> dict:
         article = session.get(Article, article_id)
         if article is None:
             raise HTTPException(status_code=404, detail=f"article {article_id} 不存在")
-        if article.platform != "xhs":
+        if article.platform not in ("xhs", "wechat"):
             raise HTTPException(
-                status_code=409, detail="违禁词体检目前仅支持小红书文章（RedFox 小红书词库）"
+                status_code=409, detail="违禁词体检目前仅支持小红书 / 公众号文章"
             )
         text = f"{article.title}\n\n{article.content}"
+        platform_label = "微信公众号" if article.platform == "wechat" else "小红书"
     try:
-        result = redfox.sensitive_word_search(text)
+        result = redfox.sensitive_word_search(text, platform=platform_label)
     except RedFoxError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
     return {
@@ -179,13 +188,20 @@ def add_sensitive_words(platform: str, payload: SensitiveWordsIn) -> dict:
 
 
 class PublishMetrics(BaseModel):
-    """回填互动数据：非负、封顶 10^9（防脏数据/溢出写进 publish_records）。"""
+    """回填互动数据：非负、封顶 10^9（防脏数据/溢出写进 publish_records）。
 
-    model_config = {"extra": "allow"}  # 未来加字段（如 shares）不破坏旧调用方
+    reads/watches/shares 是公众号字段（P9）：阅读数是效果分的量纲基础、
+    在看/分享是公众号最强互动信号；xhs 回填不传这三项按 0 计。
+    """
+
+    model_config = {"extra": "allow"}  # 未来加字段不破坏旧调用方
 
     likes: int = Field(default=0, ge=0, le=10**9)
     collects: int = Field(default=0, ge=0, le=10**9)
     comments: int = Field(default=0, ge=0, le=10**9)
+    reads: int = Field(default=0, ge=0, le=10**9, description="公众号阅读数")
+    watches: int = Field(default=0, ge=0, le=10**9, description="公众号在看数")
+    shares: int = Field(default=0, ge=0, le=10**9, description="公众号分享数")
 
 
 class PublishRequest(BaseModel):

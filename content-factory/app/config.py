@@ -49,6 +49,13 @@ VIRAL_FANS_MAX = int(os.environ.get("CF_VIRAL_FANS_MAX", "5000"))
 VIRAL_LIKES_MIN = int(os.environ.get("CF_VIRAL_LIKES_MIN", "500"))  # 自动采样候选预筛；人工样本不做该预筛
 VIRAL_SCORE_MIN = float(os.environ.get("CF_VIRAL_SCORE_MIN", "2.0"))
 
+# ---- 公众号爆款判定（P9；优质库接口无粉丝字段，不做「低粉」判定，
+# 改用阅读量下限 + 互动密度：reads ≥ GZH_READS_MIN 且 gzh_score ≥ GZH_SCORE_MIN。
+# reads 是互动密度的分母，下限属于指标有效性而非质量预筛；初值待首轮
+# 真实数据校准，结论记 docs/p4-calibration.md）----
+GZH_READS_MIN = int(os.environ.get("CF_GZH_READS_MIN", "10000"))
+GZH_SCORE_MIN = float(os.environ.get("CF_GZH_SCORE_MIN", "0.08"))
+
 # ---- 选题雷达（部分 M3，P-1a）----
 # 撞题阈值初值；P4 起按回填数据校准，结论记录在 docs/p4-calibration.md
 TOPIC_JACCARD_THRESHOLD = float(os.environ.get("CF_TOPIC_DUPLICATE_JACCARD", "0.5"))
@@ -56,11 +63,15 @@ TOPIC_DEDUP_WINDOW_DAYS = 7  # 撞题回看窗口
 TOPIC_TTL_HOURS = 72  # radar 选题保鲜：created_at + 72h
 
 # ---- topics.score 评分公式（P4 数据飞轮；公式与拍板记录见 docs/p4-calibration.md）----
-# score = base_score + SCORE_EFFECT_SCALE × log1p(Σ(likes×W_L + collects×W_C + comments×W_M))
+# score = base_score + SCORE_EFFECT_SCALE × log1p(Σ(likes×W_L + collects×W_C + comments×W_M
+#                                                 + watches×W_W + shares×W_S))
 # 求和范围 = 该 topic 全部已发布文章的 publish_records.metrics；权重与 viral_score 同构。
+# watches/shares 是公众号回填字段（P9）：xhs 旧记录无这两键按 0 计，公式向后兼容。
 SCORE_W_LIKES = float(os.environ.get("CF_SCORE_W_LIKES", "1"))
 SCORE_W_COLLECTS = float(os.environ.get("CF_SCORE_W_COLLECTS", "2"))
 SCORE_W_COMMENTS = float(os.environ.get("CF_SCORE_W_COMMENTS", "3"))
+SCORE_W_WATCHES = float(os.environ.get("CF_SCORE_W_WATCHES", "1"))
+SCORE_W_SHARES = float(os.environ.get("CF_SCORE_W_SHARES", "3"))
 SCORE_EFFECT_SCALE = float(os.environ.get("CF_SCORE_EFFECT_SCALE", "1.0"))  # 效果分整体缩放
 # 模板效果分样本量门槛：published < 该值只展示、不给出任何启停建议
 PROMPT_STATS_MIN_SAMPLES = int(os.environ.get("CF_PROMPT_STATS_MIN_SAMPLES", "10"))
@@ -87,6 +98,11 @@ XHS_SAMPLE_SCHEDULED = os.environ.get("CF_XHS_SAMPLE_SCHEDULED", "false").strip(
 # 新建栏目后自动对该栏目的关键词池发起一轮定向采样（后台执行；RedFox 按调用
 # 计费，一次建栏约消耗 = 关键词数 次调用。要关闭在 .env 加 CF_PILLAR_AUTO_SAMPLE=false）
 PILLAR_AUTO_SAMPLE = os.environ.get("CF_PILLAR_AUTO_SAMPLE", "true").strip().lower() in ("1", "true", "yes")
+# ---- 公众号采样器（P9；优质库 searchArticle 只读搜索，覆盖腰部以上近 30 天）----
+# 关键词来源与 xhs 同口径（显式传入 > 栏目词池 > 领域词表）；
+# 每关键词 1 页 20 条 = 1 次计费。只手动触发（计费纪律），定时采样暂不开放
+GZH_SAMPLE_KEYWORDS = [k.strip() for k in os.environ.get("CF_GZH_SAMPLE_KEYWORDS", "").split(",") if k.strip()]
+GZH_SAMPLE_MAX_QUERIES = int(os.environ.get("CF_GZH_SAMPLE_MAX_QUERIES", "20"))
 # GitHub 开源项目采集（P7：合集栏目的真实工具素材；未鉴权 10 次/分钟）
 # 时效优先：只收"最近新建却已攒星"的新锐项目（sort=stars 在 created 窗口内
 # 即涨星最快），避免 AutoGPT 这类老牌项目长期霸榜

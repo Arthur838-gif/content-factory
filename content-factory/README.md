@@ -202,8 +202,18 @@ worker 领取是条件 UPDATE，多 worker 进程不会重复执行同一任务�
 
 - **素材正文进提示词**：evidence 快照带素材摘录（RedFox 的 `raw.article.desc`，截 200 字），生成时 `reference_points` 从「标题（链接）」升级为「标题（链接）：正文摘录」——模型仿写/深挖有真实内容可依，落实 v4 模板「素材里没有的不编造」的铁律；GitHub 仓库行的 desc 已含在标题里，不重复带。旧选题 evidence 无 desc 字段也兼容（缺省不带）。
 - **平台硬上限校验**：`XhsNote` 标题 ≤ 20 字（小红书发布上限）、正文 ≤ 950 字（给末尾标签行留余量，合计不超 1000 字上限）。超限直接生成失败进重试，报错文案拼进下一轮提示让模型自纠，免得发布前手动剪文案。封面/金句超长仍走 imaging 自动缩字号的软约束。
-- **违禁词体检（发布前质检）**：xhs ready 文章页「违禁词体检」按钮 → RedFox 小红书违禁词库检测标题+正文（**按调用计费，页面 confirm 后才发请求**，不进自动链路）→ 命中词逐个可点「＋词」回填本地 `sensitive_xhs.txt`（文件追加、去重、即时生效），下次生成直接在本地方向拦截——词表滚动扩充的既定路径。英文子串误报按 skill 同款规则剔除（如 "av" ⊂ "Gravitas" 不算命中，避免回填词表后误杀含英文的文章）。接口：`POST /api/articles/{id}/sensitive-check`（wechat 行 409，RedFox 错误 502）、`POST /api/sensitive/{platform}/words`（单批 ≤50 词、单词 ≤50 字，防误杀整站的超短词在服务层拦截）。
-- 敏感词表本体仍是文件即数据（`data/sensitive_xhs.txt`，每行一词），冷启动占位词待人工按「所涉领域监管词 + 平台违禁词」滚动扩充，体检回填是加速器不是替代。
+- **违禁词体检（发布前质检）**：xhs / wechat ready 文章页「违禁词体检」按钮 → RedFox 违禁词库检测标题+正文，**平台随文章**（xhs 走小红书词库、wechat 走微信公众号词库，命中词分别回填 `sensitive_xhs.txt` / `sensitive_wechat.txt`；**按调用计费，页面 confirm 后才发请求**，不进自动链路）→ 命中词逐个可点「＋词」回填本地词表（文件追加、去重、即时生效），下次生成直接在本地方向拦截——词表滚动扩充的既定路径。英文子串误报按 skill 同款规则剔除（如 "av" ⊂ "Gravitas" 不算命中，避免回填词表后误杀含英文的文章）。接口：`POST /api/articles/{id}/sensitive-check`（非 xhs/wechat 平台 409，RedFox 错误 502）、`POST /api/sensitive/{platform}/words`（单批 ≤50 词、单词 ≤50 字，防误杀整站的超短词在服务层拦截）。
+- 敏感词表本体仍是文件即数据（`data/sensitive_xhs.txt` / `data/sensitive_wechat.txt`，每行一词），冷启动占位词待人工按「所涉领域监管词 + 平台违禁词」滚动扩充，体检回填是加速器不是替代。
+
+## P9 公众号数据链路（优质库采样 → 建题 → 生成 → 发布闭环）
+
+- **RedFox 优质库采样**：`searchArticle`（sortType=`_4` 最热，每关键词 1 页 20 条 = 1 次计费，offset 翻页留待深采）。`GzhSampleCollector`（`gzh_sample`）与 xhs 同一套持久化采样队列（入队 → 逐关键词执行 → 进度落库），入口：工作台灵感选题区「公众号采样」/ 素材采样页；**不进定时任务**（计费纪律，定时仍仅 xhs）。关键词优先级同 xhs：显式传入 > `CF_GZH_SAMPLE_KEYWORDS` > 启用栏目词池 > 领域词表，上限 `CF_GZH_SAMPLE_MAX_QUERIES`（默认 20）。
+- **爆款判定（阅读量口径）**：优质库无粉丝字段，不复制「低粉」概念——`gzh_viral_score = (likes + watches + 2×collects + 3×shares + 3×comments) ÷ max(reads,1)`，入选条件 `reads ≥ CF_GZH_READS_MIN（默认 10000）且 score ≥ CF_GZH_SCORE_MIN（默认 0.08）`（阅读量是互动密度的分母，下限属于指标有效性而非预筛）。**gzh 条目绝不走 xhs 判定**——fans 恒 0 会让爆文率除以 1、全数误判。reads/watches/shares 存 `raw.article`，evidence 快照一并带上。阈值与初值口径记录在 `docs/p4-calibration.md`，校准视图（`/stats`）按源分流复判。
+- **手动喂样本（URL 抓取式）**：素材采样页贴公众号文章链接 + 领域 → `queryArticleDetail`（1 次计费，confirm 后才发）抓全量指标与正文 → 与自动采样同一打分/落库/撞题/建题管线。比手填互动数准确；URL 重复 409（**计费调用前先查重**，不白花），RedFox 失败 502 不写半成品。接口：`POST /api/viral-samples/gzh-manual`。
+- **生成质量**：`WechatArticle` 平台硬上限校验（标题 30 字 / 摘要 54 字折叠位 / 正文 3000 字，超限生成失败进重试、报错拼进提示自纠）；`prompts/wechat_article.yml` 升 v2（接 P5b 系列上下文 + 标签候选 + 公众号写作规范：开头钩子 200-300 / 主体 800-1000 二级标题分段 / 结尾收束 200-300 + 互动引导），v1 行保留、选模板自动取 enabled 最大版本；标题打分平台化——wechat 四维（赛道匹配 15 / 点击诱因 35 / 结构合规 15 / 爆文潜质 35，0-100 制，S≥90/A≥70/B≥50）与 xhs 六维（0-10 制）同响应 JSON 形状，文章页按钮按平台出「四维打分 / 六维打分」。
+- **PIL 封面 + 文稿素材包**：wechat 生成 ready 自动出 900×383 PIL 封面（摘要优先、标题兜底；零计费本地渲染，不涉 AI 生图总闸 `CF_IMAGEGEN_ENABLED`；失败 → article failed，同 SDD 5.7 事务语义）。素材包放开 wechat：`title.txt + digest.txt + content.txt + images/01_cover.png`（发布后台摘要位直接粘贴）。
+- **发布回填（公众号口径）**：文章页表单按平台出字段——wechat 阅读/在看/点赞/分享/收藏/评论，xhs 点赞/收藏/评论。效果分扩展 `+ watches×CF_SCORE_W_WATCHES(1) + shares×CF_SCORE_W_SHARES(3)`（reads 是受众规模量纲，同 fans 不进效果分；xhs 旧记录无这两键不受影响）。
+- 真实接口验收脚本：`tests/_run_real_gzh_acceptance.py`（本地手动运行，不进 CI，3 次计费：searchArticle / queryArticleDetail / 违禁词 platform=微信公众号）。
 
 ## Non-goals（明确不做，计划书第 2 章）
 | --- | --- |
@@ -288,7 +298,8 @@ wechat 回归、适配器单元（标签去重去 #）。
 `01_cover.png`… 编号、assets 登记 kind/尺寸/路径）、中文无乱码无截断（emoji 剥离、
 超长自动缩字号、折行宽度）、重复生成不残留（开新行新目录干净、旧目录保留、
 `render_assets` 替换旧行不重复登记）、`wechat_cover` 900×383 独立渲染、
-`checklist_card` 独立渲染、字体缺失 → failed 且提示放置方法、wechat 回归（不出图）。
+`checklist_card` 独立渲染、字体缺失 → failed 且提示放置方法、wechat 回归
+（P9 起生成自动出 1 张 PIL 封面并登记 assets）。
 
 ### 端到端 curl 验收（需起服务）
 
@@ -311,7 +322,7 @@ curl --noproxy '*' -X POST "http://127.0.0.1:8000/api/topics/1/generate?platform
 - `data/imaging_templates/`：版式即数据（画布/背景/字体/字号/槽位/色值全在 YAML），
   改版式不重启即生效。四套：`emotion_cover`（小红书封面 1080×1440）、`quote_card`
   （金句卡片，生成链路用）、`checklist_card`（清单卡片，独立渲染验证，暂不接链路）、
-  `wechat_cover`（公众号封面 900×383，调用方 M6 后续接入）。
+  `wechat_cover`（公众号封面 900×383，P9 起接入 wechat 生成链路）。
 - `CF_ASSETS_DIR` / `CF_FONTS_DIR` / `CF_IMAGING_TEMPLATES_DIR` / `CF_IMAGING_MIN_FONT_SIZE`：
   输出目录与字号下限（默认 28），超长文案自动缩小字号而非截断。
 - 出图契约（SDD 5.7）：articles 与 assets 同一事务，出图失败（含字体缺失）article

@@ -11,7 +11,7 @@ class HotItem(BaseModel):
     url 为去重键；无 URL 的源按第 5 章约定用 sha1(source + title + author) 填充。
     """
 
-    source: str  # weibo / zhihu / baidu / xhs
+    source: str  # weibo / zhihu / baidu / xhs / gzh / github
     title: str
     url: str = ""
     author: str | None = None
@@ -48,12 +48,37 @@ class CollectorRunResult(BaseModel):
 class WechatArticle(BaseModel):
     """公众号输出 Schema（计划书 6.1 / SDD 5.6，M5 与适配层之间的契约）。
 
-    LLM 只产出这三个字段的结构化 JSON；HTML 渲染与草稿箱推送属 M6，P0 不做。
+    LLM 只产出这三个字段的结构化 JSON；HTML 渲染与草稿箱推送属 M6。
+    P9：title/digest/content_md 带平台硬上限校验（超限直接生成失败进重试，
+    模型按报错自纠）——公众号发布前标题限 64 字（这里按产品规范卡 30 字）、
+    摘要卡 54 字（折叠位）；正文 3000 字为生成侧上限（规范 1500-3000），
+    与 XhsNote 同口径只设上限不设下限，避免短文反复重试空转。
     """
 
     title: str = Field(..., description="信息密度高的标题，≤ 30 字")
     digest: str = Field(..., description="摘要，≤ 54 字")
     content_md: str = Field(..., description="Markdown 正文，1500-3000 字，含小标题分级")
+
+    @field_validator("title")
+    @classmethod
+    def _title_platform_limit(cls, value: str) -> str:
+        if len(value) > 30:
+            raise ValueError(f"标题 {len(value)} 字超过公众号 30 字规范上限，请压缩：「{value}」")
+        return value
+
+    @field_validator("digest")
+    @classmethod
+    def _digest_platform_limit(cls, value: str) -> str:
+        if len(value) > 54:
+            raise ValueError(f"摘要 {len(value)} 字超过公众号 54 字折叠位上限，请压缩：「{value}」")
+        return value
+
+    @field_validator("content_md")
+    @classmethod
+    def _content_platform_limit(cls, value: str) -> str:
+        if len(value) > 3000:
+            raise ValueError(f"正文 {len(value)} 字超过 3000 字生成侧上限，请压缩到 3000 字内")
+        return value
 
 
 class XhsNote(BaseModel):
@@ -105,6 +130,25 @@ class ManualSampleInput(BaseModel):
     collects: int = Field(..., ge=0, le=10**9, description="收藏数")
     comments: int = Field(..., ge=0, le=10**9, description="评论数")
     domain: str = Field(..., max_length=50, description="领域，须为 data/domains.yml 中的领域名")
+
+    @field_validator("url")
+    @classmethod
+    def _url_must_be_http(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("url 必须以 http:// 或 https:// 开头")
+        return value
+
+
+class ManualGzhSampleInput(BaseModel):
+    """POST /api/viral-samples/gzh-manual 人工喂公众号样本（P9）。
+
+    只传文章地址：服务端调 RedFox 优质库详情接口抓全量指标与正文
+    （1 次计费，页面 confirm 后才触发），比手填互动数准确；
+    录入后与自动采样走同一打分、落库、撞题与建题管线。
+    """
+
+    url: str = Field(..., max_length=1000, description="公众号文章链接，http(s) 开头")
+    domain: str = Field(..., min_length=1, max_length=50, description="领域（可下拉选或手填，与人工喂笔记同口径）")
 
     @field_validator("url")
     @classmethod

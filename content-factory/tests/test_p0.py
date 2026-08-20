@@ -78,16 +78,17 @@ def main() -> int:
     init_db()
     _insert_topics()
 
-    print("\n[1] 种子模板入库（幂等键 wechat+article+v1）")
+    print("\n[1] 种子模板入库（幂等键 wechat+article+v2）")
     seeded = prompt_engine.seed_prompts()
     # P1 起 SEED_FILES 还含 xhs_note.yml，此处只断言公众号键已入库且 xhs 键随之入库
-    check("公众号模板首次入库", "wechat+article+v1" in seeded, str(seeded))
+    check("公众号模板首次入库", "wechat+article+v2" in seeded, str(seeded))
     reseeded = prompt_engine.seed_prompts()
     check("重复入库跳过（重启不覆盖）", reseeded == [], str(reseeded))
     with session_scope() as s:
-        p = s.scalars(select(Prompt).where(Prompt.platform == "wechat")).first()
+        p = s.scalars(select(Prompt).where(Prompt.platform == "wechat",
+                                          Prompt.scenario == "article")).first()
         check("模板字段完整", p is not None and p.platform == "wechat"
-              and p.scenario == "article" and p.version == 1 and p.enabled, str(p and p.platform))
+              and p.scenario == "article" and p.version == 2 and p.enabled, str(p and p.platform))
         check("模板含 system/user 标记", p is not None and "# system" in p.template
               and "# user" in p.template)
 
@@ -122,7 +123,10 @@ def main() -> int:
     with session_scope() as s:
         _, sm, um = prompt_engine.render_messages(s, "wechat", "article",
                                                    {"title": "T", "angle": "A", "domain": "D",
-                                                    "reference_points": ""})
+                                                    "reference_points": "", "tag_candidates": [],
+                                                    "series_theme": "", "series_pillar": "",
+                                                    "series_episode": "", "series_total": "",
+                                                    "series_others": [], "series_hub": ""})
     check("改后文案出现在渲染结果", "改过的文案" in um, um[:60])
     check("原文案已消失", "信息密度高" not in um, um[:60])
 

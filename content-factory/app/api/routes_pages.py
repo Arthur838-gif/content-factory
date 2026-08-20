@@ -85,7 +85,7 @@ def topics_page(request: Request):
             {"name": row.name, "status": row.status, "short": label}
             for row in session.scalars(
                 select(CollectorState).where(
-                    CollectorState.name.in_(("xhs_sample", "github_tools"))
+                    CollectorState.name.in_(("xhs_sample", "gzh_sample", "github_tools"))
                 )
             ).all()
             for label in [_WORKBENCH_LABELS.get(row.name, row.name)]
@@ -204,6 +204,7 @@ def stats_page(request: Request, month: str | None = None):
 COLLECTOR_LABELS = {
     "hotboard": "热榜采集（微博/知乎/百度，免费，每小时定时）",
     "xhs_sample": "小红书采样（RedFox 计费调用）",
+    "gzh_sample": "公众号采样（RedFox 计费调用，优质库近 30 天）",
     "github_tools": "GitHub 开源项目采集（免费，只收近 90 天新锐项目）",
     "xhs_teardown": "低粉爆款周度拆解（LLM 分析库内样本，每周一 06:00）",
 }
@@ -211,6 +212,7 @@ COLLECTOR_LABELS = {
 # 工作台采样引擎卡片的简短名（卡片空间小，不放长描述）
 _WORKBENCH_LABELS = {
     "xhs_sample": "小红书采样（RedFox 优先）",
+    "gzh_sample": "公众号采样（RedFox）",
     "github_tools": "GitHub 新锐项目采集",
 }
 

@@ -11,3 +11,6 @@ data/*
 !data/fonts/
 !data/imaging_templates/
 *.log
+
+# 构建产物与本地验收输出（素材包/报告/服务日志）
+build/

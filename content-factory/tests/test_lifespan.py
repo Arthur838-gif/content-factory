@@ -102,7 +102,7 @@ def test_page_contracts_and_safe_rendering(seeded_env, monkeypatch):
 
     viral = client.get("/viral").text
     assert "采样任务" in viral and "排队中" in viral
-    assert "手动采样一轮（xhs_sample，入队执行）" in viral
+    assert "小红书采样一轮（入队执行）" in viral and "公众号采样一轮（入队执行）" in viral
     assert f"<td>{job.id}</td>" in viral
 
     home = client.get("/").text
